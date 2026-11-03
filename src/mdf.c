@@ -2409,6 +2409,10 @@ static mdf_status mdf_method_render_cstr(mdf *self, const char *markdown, char *
 static const char *mdf_method_error(const mdf *self);
 static void mdf_method_destroy(mdf *self);
 static void mdf_method_string_free(mdf *self, char *s);
+static mdf_status mdf_method_pager_file(mdf *self, const char *path, mdf_pager_format format,
+                                       const mdf_pager_control *control);
+static mdf_status mdf_method_pager_source(mdf *self, const char *name, mdf_source *source,
+                                         mdf_pager_format format, const mdf_pager_control *control);
 
 static void mdf_bind_receiver_methods(mdf *inst)
 {
@@ -2428,6 +2432,8 @@ static void mdf_bind_receiver_methods(mdf *inst)
     inst->reset = mdf_reset;
     inst->set_sink = mdf_set_sink;
     inst->get_theme_palette = mdf_get_theme_palette;
+    inst->pager_file = mdf_method_pager_file;
+    inst->pager_source = mdf_method_pager_source;
 }
 
 static mdf_status mdf_impl_configure_emit_buffer(mdf_impl *impl)
@@ -3341,6 +3347,50 @@ static mdf_status mdf_method_render(mdf *self, mdf_source *source)
     return sink == NULL ? MDF_ERROR_INVALID : instance_render(self, source, sink);
 }
 
+static mdf_status mdf_method_page(mdf *self, const char *name, mdf_source *source,
+                                  mdf_pager_format format, const mdf_pager_control *control,
+                                  int from_source)
+{
+    mdf_impl *impl;
+    mdf_options opts;
+    mdf_status st;
+
+    if (!mdf_renderer_is_builtin(self)) return MDF_ERROR_INVALID;
+    impl = (mdf_impl *)self->impl;
+    if (impl->format != MDF_FORMAT_ANSI || impl->render_active ||
+        impl->incremental_state != MDF_INCREMENTAL_IDLE || impl->in_paragraph || impl->in_pre || impl->ansi_word_len > 0) {
+        mdf_set_error(self, "pager requires an idle ANSI receiver");
+        return MDF_ERROR_INVALID;
+    }
+    opts = impl->opts;
+    opts.allocator = impl->user_allocator;
+    /* Pager renderers own independent storage; never transfer receiver memory. */
+    memset(&opts.emission_buffer, 0, sizeof(opts.emission_buffer));
+    opts.emission_buffer.max_cap = impl->emit_max_cap;
+    if ((impl->emit_fixed_mode || !impl->emit_owns_buf) && impl->emit_cap < opts.emission_buffer.max_cap)
+        opts.emission_buffer.max_cap = impl->emit_cap;
+    impl->render_active = 1;
+    impl->emission_active++;
+    st = from_source ? mdf_pager_source(name, source, &opts, format, control) :
+                       mdf_pager_file(name, &opts, format, control);
+    impl->emission_active--;
+    impl->render_active = 0;
+    mdf_set_error(self, st == MDF_OK ? "" : mdf_status_string(st));
+    return st;
+}
+
+static mdf_status mdf_method_pager_file(mdf *self, const char *path, mdf_pager_format format,
+                                       const mdf_pager_control *control)
+{
+    return mdf_method_page(self, path, NULL, format, control, 0);
+}
+
+static mdf_status mdf_method_pager_source(mdf *self, const char *name, mdf_source *source,
+                                         mdf_pager_format format, const mdf_pager_control *control)
+{
+    return mdf_method_page(self, name, source, format, control, 1);
+}
+
 static mdf_status mdf_method_feed(mdf *self, const char *data, size_t len)
 {
     mdf_sink *sink;
@@ -3442,6 +3492,8 @@ const char *mdf_status_string(mdf_status status)
         return "io error";
     case MDF_ERROR_PARSE:
         return "parse error";
+    case MDF_CANCELLED:
+        return "cancelled";
     }
     return "unknown status";
 }
@@ -3766,6 +3818,9 @@ static int mdf_sink_callback_guard_write(void *userdata, const char *src, size_t
     guard->impl->emission_active++;
     rc = mdf_write_all(guard->target, src, len);
     guard->impl->emission_active--;
+    if (rc != 0) {
+        mdf_copy_error_message(guard->impl->error, sizeof(guard->impl->error), "sink write failed");
+    }
     return rc;
 }
 

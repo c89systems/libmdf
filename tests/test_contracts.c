@@ -5,7 +5,8 @@
 #include <string.h>
 #include <time.h>
 
-#define MAX_RECORDS 65536
+/* Large table regressions legitimately produce more than 64K sink writes. */
+#define MAX_RECORDS 262144
 
 /* Memcheck's CPU overhead is unrelated to the native hot-path budget. */
 static int contract_under_valgrind;
@@ -298,8 +299,8 @@ static mdf_status render_capture(mdf_format format, mdf_options *opts,
     return render_capture_limited(format, opts, markdown, chunk, 0, cap);
 }
 
-static mdf_status incremental_capture(mdf_options *opts, const char *markdown,
-                                      size_t fragment, capture *cap)
+static mdf_status incremental_capture_format(mdf_format format, mdf_options *opts, const char *markdown,
+                                             size_t fragment, capture *cap)
 {
     mdf *inst;
     mdf_sink sink;
@@ -314,7 +315,8 @@ static mdf_status incremental_capture(mdf_options *opts, const char *markdown,
     opts->write_trace.emit = capture_trace;
     sink.userdata = cap;
     sink.write = capture_write;
-    st = mdf_create(MDF_FORMAT_ANSI, opts, &inst);
+    st = mdf_create(format, opts, &inst);
+    if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(inst, "mdf");
     len = strlen(markdown);
     off = 0;
     while (st == MDF_OK && off < len) {
@@ -335,6 +337,12 @@ static mdf_status incremental_capture(mdf_options *opts, const char *markdown,
         inst->destroy(inst);
     }
     return st;
+}
+
+static mdf_status incremental_capture(mdf_options *opts, const char *markdown,
+                                      size_t fragment, capture *cap)
+{
+    return incremental_capture_format(MDF_FORMAT_ANSI, opts, markdown, fragment, cap);
 }
 
 static mdf_status render_count(mdf_format format, mdf_options *opts, const char *markdown,
@@ -1357,13 +1365,291 @@ static int test_table_contract(void)
             opts.table_buffer_mode = MDF_TABLE_BUFFER_FULL;
             st = render_capture(MDF_FORMAT_ANSI, &opts, source, 4096, &cap);
             fails += expect(st == MDF_OK && cap.failed == 0,
-                            "ordinary full-buffer table exceeds only incremental retention cap");
+                            "ordinary full-buffer table streams beyond the retention limit");
             fails += expect_trace_matches_writes(&cap,
                                                  "ordinary large table writes match traces");
             fails += expect_contains(cap.out, "x",
                                      "ordinary large table produces rendered rows");
             capture_free(&cap);
             free(source);
+        }
+    }
+    return fails;
+}
+
+static size_t count_text(const char *text, const char *needle)
+{
+    size_t count;
+    const char *found;
+
+    count = 0;
+    if (text == NULL) return 0;
+    while ((found = strstr(text, needle)) != NULL) {
+        count++;
+        text = found + strlen(needle);
+    }
+    return count;
+}
+
+static int expect_adaptive_rows(const capture *cap, size_t rows)
+{
+    const char *p;
+    size_t next;
+    size_t value;
+    int j;
+    int fails;
+
+    next = 0;
+    fails = 0;
+    p = cap->out == NULL ? "" : cap->out;
+    while ((p = strchr(p, 'R')) != NULL) {
+        value = 0;
+        for (j = 1; j <= 4 && p[j] >= '0' && p[j] <= '9'; j++)
+            value = value * 10 + (size_t)(p[j] - '0');
+        if (j == 5) {
+            fails += expect(value == next, "adaptive table emits each row once, in order");
+            next++;
+        }
+        p++;
+    }
+    fails += expect(next == rows, "adaptive table loses no buffered or later rows");
+    return fails;
+}
+
+static int test_adaptive_table_contract(void)
+{
+    static const size_t fragments[] = {1, 7, 4096};
+    static const char suffix[] = "\nAfterAdaptive\n\n| SmallHead |\n|---|\n| small |\n";
+    mdf_options opts;
+    mdf_format format;
+    mdf_status st;
+    mdf_status retry_st;
+    mdf *inst;
+    mdf_sink sink;
+    capture whole;
+    capture split;
+    char *markdown;
+    const char *quote;
+    const char *border;
+    const char *end;
+    const char *first_row;
+    failing_allocator allocator;
+    size_t rows;
+    size_t row;
+    size_t len;
+    size_t body_len;
+    size_t fill;
+    size_t j;
+    size_t committed;
+    size_t failure_write;
+    size_t cut;
+    size_t step;
+    size_t oom_failures;
+    int scenario;
+    int kind;
+    int fails;
+
+    fails = 0;
+    for (kind = 0; kind < 2; kind++) {
+        format = kind == 0 ? MDF_FORMAT_ANSI : MDF_FORMAT_HTML;
+        for (scenario = 0; scenario < 3; scenario++) {
+            rows = scenario == 1 ? 650 : 1100;
+            quote = scenario == 2 ? "> " : "";
+            markdown = (char *)malloc(rows * 192 + 16384);
+            fails += expect(markdown != NULL, "adaptive table fixture allocates");
+            if (markdown == NULL) continue;
+            len = scenario == 2 ? 0 : (size_t)sprintf(markdown, "| HeadUnique |\n|---|\n");
+            for (row = 0; row < rows; row++) {
+                len += (size_t)sprintf(markdown + len, "%s| R%04lu", quote, (unsigned long)row);
+                if (scenario != 1 && row == 1000)
+                    len += (size_t)sprintf(markdown + len, " PriorSettledColumnWidth");
+                if (scenario != 1 && row == 1080)
+                    len += (size_t)sprintf(markdown + len, " LateValueThatMustWrapAcrossSettledColumns");
+                fill = scenario == 1 ? (row == 600 ? 7000 : 96) : 0;
+                if (fill > 0) {
+                    markdown[len++] = ' ';
+                    memset(markdown + len, 'x', fill);
+                    len += fill;
+                }
+                len += (size_t)sprintf(markdown + len, " |\n");
+            }
+            body_len = len;
+            memcpy(markdown + len, suffix, sizeof(suffix));
+            mdf_options_init(&opts);
+            opts.ansi_mode = MDF_ANSI_OFF;
+            opts.width = 160;
+            opts.table_wire_mode = MDF_TABLE_WIRE_ASCII;
+            opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+            st = render_capture(format, &opts, markdown, 4096, &whole);
+            if (st != MDF_OK || whole.failed) {
+                fprintf(stderr, "adaptive format=%d scenario=%d status=%d sink_failed=%d writes=%lu\n",
+                        (int)format, scenario, (int)st, whole.failed, (unsigned long)whole.write_count);
+            }
+            fails += expect(st == MDF_OK && !whole.failed, "source render switches to adaptive rows");
+            fails += expect_adaptive_rows(&whole, rows);
+            fails += expect(count_text(whole.out, "HeadUnique") == (scenario == 2 ? 0u : 1u),
+                            "adaptive transition never repeats its header");
+            fails += expect(count_text(whole.out, "SmallHead") == 1 && count_text(whole.out, "AfterAdaptive") == 1,
+                            "table closure preserves following text and the next table");
+            if (format == MDF_FORMAT_ANSI) {
+                fails += expect_trace_matches_writes(&whole, "adaptive table sink writes match traces");
+                fails += expect(count_text(whole.out, "+---") == (scenario == 2 ? 5u : 6u),
+                                "adaptive table has one opening, header separator and final border");
+                if (scenario != 1) {
+                    border = whole.out == NULL ? NULL : strstr(whole.out, "+---");
+                    end = border == NULL ? NULL : strchr(border + 1, '+');
+                    fails += expect(end != NULL && end - border >= 25,
+                                    "adaptive column widths include all buffered prefix rows");
+                    fails += expect_not_contains(whole.out, "LateValueThatMustWrapAcrossSettledColumns",
+                                                 "later wider cells wrap within settled columns");
+                }
+            } else {
+                fails += expect(count_text(whole.out, "<table ") == 2 && count_text(whole.out, "</table>") == 2 &&
+                                count_text(whole.out, "<tbody>") == 2 && count_text(whole.out, "</tbody>") == 2,
+                                "adaptive HTML remains two complete tables without a transition seam");
+            }
+            for (j = contract_under_valgrind ? 1u : 0u; j < (contract_under_valgrind ? 2u : 3u); j++) {
+                st = incremental_capture_format(format, &opts, markdown, fragments[j], &split);
+                fails += expect(st == MDF_OK && !split.failed, "fragmented adaptive table feeds and flushes render");
+                fails += expect_capture_writes_equal(&split, &whole, "adaptive transition preserves exact decisions across feeds");
+                if (format == MDF_FORMAT_ANSI)
+                    fails += expect_trace_matches_writes(&split, "fragmented adaptive table writes match traces");
+                capture_free(&split);
+            }
+            inst = NULL;
+            memset(&split, 0, sizeof(split));
+            opts.write_trace.userdata = &split;
+            opts.write_trace.emit = capture_trace;
+            sink.userdata = &split;
+            sink.write = capture_write;
+            st = mdf_create(format, &opts, &inst);
+            if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(inst, "mdf");
+            if (st == MDF_OK) st = mdf_feed(inst, markdown, body_len, &sink);
+            fails += expect(st == MDF_OK && split.write_count > 0, "large unfinished table emits before EOF");
+            fails += expect_adaptive_rows(&split, rows);
+            if (format == MDF_FORMAT_HTML)
+                fails += expect(count_text(split.out, "<table ") == 1 && count_text(split.out, "</table>") == 0,
+                                "HTML fallback leaves the original table open");
+            committed = split.write_count;
+            if (st == MDF_OK) st = mdf_flush(inst, &sink);
+            fails += expect(st == MDF_OK && split.write_count == committed, "flush never replays adaptive output");
+            if (st == MDF_OK) st = mdf_feed(inst, markdown + body_len, sizeof(suffix) - 1, &sink);
+            fails += expect(st == MDF_OK && count_text(split.out, "SmallHead") == 0,
+                            "the next small table returns to full buffering");
+            if (st == MDF_OK) st = mdf_finish_document(inst, &sink);
+            fails += expect(st == MDF_OK, "adaptive table closes and continues the document");
+            fails += expect_capture_writes_equal(&split, &whole, "adaptive streaming uses one uninterrupted table emission sequence");
+            if (format == MDF_FORMAT_ANSI)
+                fails += expect_trace_matches_writes(&split, "live adaptive table writes match traces");
+            if (inst != NULL) inst->destroy(inst);
+            capture_free(&split);
+            first_row = whole.out == NULL ? NULL : strstr(whole.out, "R0000");
+            if (first_row != NULL) {
+                cut = (size_t)(first_row - whole.out) + 3;
+                committed = 0;
+                failure_write = 0;
+                while (failure_write < whole.write_count && committed < cut)
+                    committed += whole.writes[failure_write++].len;
+                inst = NULL;
+                memset(&split, 0, sizeof(split));
+                split.write_limit = failure_write;
+                opts.write_trace.userdata = &split;
+                st = mdf_create(format, &opts, &inst);
+                if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(inst, "mdf");
+                if (st == MDF_OK) st = mdf_feed(inst, markdown, body_len, &sink);
+                if (st != MDF_ERROR_IO || !split.failed)
+                    fprintf(stderr, "adaptive rejected sink format=%d scenario=%d status=%d failed=%d\n",
+                            (int)format, scenario, (int)st, split.failed);
+                fails += expect(st == MDF_ERROR_IO && split.failed,
+                                "sink failure while draining buffered rows propagates");
+                committed = split.write_count;
+                retry_st = inst == NULL ? MDF_OK : mdf_feed(inst, "x", 1, &sink);
+                fails += expect(retry_st != MDF_OK && split.write_count == committed,
+                                "failed adaptive conversion never retries or duplicates output");
+                if (format == MDF_FORMAT_ANSI)
+                    fails += expect_trace_matches_writes(&split, "failed adaptive conversion preserves trace identity");
+                if (inst != NULL) inst->destroy(inst);
+                capture_free(&split);
+            }
+            if (scenario == 0) {
+                oom_failures = 0;
+                for (step = 1; step <= 16; step *= 4) {
+                    memset(&allocator, 0, sizeof(allocator));
+                    memset(&split, 0, sizeof(split));
+                    inst = NULL;
+                    opts.allocator.userdata = &allocator;
+                    opts.allocator.alloc = failing_alloc;
+                    opts.allocator.realloc = NULL;
+                    opts.allocator.free = failing_free;
+                    opts.write_trace.userdata = &split;
+                    st = mdf_create(format, &opts, &inst);
+                    if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(inst, "mdf");
+                    cut = (size_t)(strstr(markdown, "| R1023") - markdown);
+                    if (st == MDF_OK) st = mdf_feed(inst, markdown, cut, &sink);
+                    fails += expect(st == MDF_OK, "allocation failure setup buffers the prefix");
+                    allocator.fail_at = allocator.calls + step;
+                    if (st == MDF_OK)
+                        st = mdf_feed(inst, markdown + cut, (size_t)(strchr(markdown + cut, '\n') - (markdown + cut)) + 1, &sink);
+                    if (st == MDF_OK) st = mdf_finish_document(inst, &sink);
+                    if (allocator.failed) {
+                        oom_failures++;
+                        fails += expect(st != MDF_OK && !split.failed,
+                                        "allocation failure during adaptive conversion remains an error");
+                    } else {
+                        fails += expect(st == MDF_OK, "adaptive conversion succeeds with cached allocations");
+                    }
+                    if (format == MDF_FORMAT_ANSI)
+                        fails += expect_trace_matches_writes(&split, "OOM conversion preserves sink and trace identity");
+                    if (inst != NULL) inst->destroy(inst);
+                    fails += expect(allocator.live == 0, "adaptive conversion releases allocations after failure");
+                    capture_free(&split);
+                }
+                fails += expect(oom_failures > 0, "adaptive conversion exercises actual allocation failures");
+            }
+            capture_free(&whole);
+            free(markdown);
+        }
+        inst = NULL;
+        memset(&split, 0, sizeof(split));
+        mdf_options_init(&opts);
+        opts.ansi_mode = MDF_ANSI_OFF;
+        opts.table_buffer_mode = MDF_TABLE_BUFFER_ROW;
+        opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+        opts.write_trace.userdata = &split;
+        opts.write_trace.emit = capture_trace;
+        st = mdf_create(format, &opts, &inst);
+        if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(inst, "mdf");
+        if (st == MDF_OK) st = mdf_feed(inst, "| Head |\n|---|\n| EarlyCell |\n", strlen("| Head |\n|---|\n| EarlyCell |\n"), &sink);
+        fails += expect(st == MDF_OK && count_text(split.out, "EarlyCell") == 1,
+                        "explicit row mode emits after the first body row in either format");
+        if (format == MDF_FORMAT_HTML)
+            fails += expect(count_text(split.out, "<table ") == 1 && count_text(split.out, "</table>") == 0,
+                            "explicit HTML row mode keeps its streamed table open");
+        if (st == MDF_OK) st = mdf_finish_document(inst, &sink);
+        fails += expect(st == MDF_OK, "explicit row mode finishes in either format");
+        if (format == MDF_FORMAT_ANSI)
+            fails += expect_trace_matches_writes(&split, "explicit row mode sink writes match traces");
+        if (inst != NULL) inst->destroy(inst);
+        capture_free(&split);
+        markdown = (char *)malloc(71000);
+        fails += expect(markdown != NULL, "oversized row fixture allocates");
+        if (markdown != NULL) {
+            len = (size_t)sprintf(markdown, "| Head |\n|---|\n| ");
+            memset(markdown + len, 'x', 70000);
+            memcpy(markdown + len + 70000, " |\n", 4);
+            mdf_options_init(&opts);
+            opts.ansi_mode = MDF_ANSI_OFF;
+            opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+            st = render_capture(format, &opts, markdown, 4096, &whole);
+            fails += expect(st == MDF_ERROR_PARSE && !whole.failed, "oversized row remains bounded in source rendering");
+            if (format == MDF_FORMAT_ANSI)
+                fails += expect_trace_matches_writes(&whole, "oversized row failure preserves trace identity");
+            st = incremental_capture_format(format, &opts, markdown, 7, &split);
+            fails += expect(st == MDF_ERROR_PARSE && !split.failed, "oversized row remains bounded in incremental rendering");
+            fails += expect_capture_writes_equal(&split, &whole, "oversized row failure is independent of fragments");
+            capture_free(&split);
+            capture_free(&whole);
+            free(markdown);
         }
     }
     return fails;
@@ -5759,6 +6045,7 @@ int main(int argc, char **argv)
     fails += test_unicode_width_stream_contract();
     fails += test_margin_contract();
     fails += test_table_contract();
+    fails += test_adaptive_table_contract();
     fails += test_table_pipe_escape_contract();
     fails += test_chart_trace_contract();
     fails += test_runtime_width_autolink_contract();

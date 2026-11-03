@@ -2028,8 +2028,10 @@ int main(void)
                     offsetof(mdf, impl) == offsetof(mdf_v011_layout, impl),
                     "runtime geometry consumes an ABI-4 reserve slot without shifting old members");
     fails += expect(renderer->get_theme_palette != NULL &&
-                    sizeof(mdf) == offsetof(mdf, get_theme_palette) + sizeof(renderer->get_theme_palette),
-                    "theme palette method is appended after the complete released receiver layout");
+                    offsetof(mdf, pager_file) == offsetof(mdf, get_theme_palette) + sizeof(renderer->get_theme_palette) &&
+                    offsetof(mdf, pager_source) == offsetof(mdf, pager_file) + sizeof(renderer->pager_file) &&
+                    sizeof(mdf) == offsetof(mdf, pager_source) + sizeof(renderer->pager_source),
+                    "pager methods append after the released receiver and palette method");
     for (reserved_index = 0; reserved_index < MDF_RECEIVER_RESERVED_SLOTS; reserved_index++) {
         fails += expect(renderer->reserved[reserved_index] == NULL,
                         "single-handle api leaves reserved receiver slots null");

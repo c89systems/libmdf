@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 #define CHECK(condition) do { if (!(condition)) { \
     fprintf(stderr, "theme palette check failed at line %d: %s\n", __LINE__, #condition); return 1; \
@@ -152,6 +153,11 @@ int main(void)
         CHECK(mdf_create(MDF_FORMAT_ANSI, &opts, &renderer) == MDF_OK);
         before = calls;
         CHECK(renderer->get_theme_palette != NULL);
+        CHECK(renderer->pager_file != NULL && renderer->pager_source != NULL);
+        CHECK(renderer->pager_file(NULL, "unused", MDF_PAGER_FORMAT_TEXT, NULL) == MDF_ERROR_INVALID);
+        CHECK(renderer->pager_source(NULL, "unused", NULL, MDF_PAGER_FORMAT_TEXT, NULL) == MDF_ERROR_INVALID);
+        CHECK(offsetof(mdf, pager_file) > offsetof(mdf, get_theme_palette));
+        CHECK(offsetof(mdf, pager_source) > offsetof(mdf, pager_file));
         CHECK(renderer->get_theme_palette(renderer, &reference) == MDF_OK);
         CHECK(mdf_get_theme_palette(renderer, NULL) == MDF_ERROR_INVALID);
         CHECK(calls == before);

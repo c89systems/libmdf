@@ -97,7 +97,7 @@ static void lua_mdf_snapshot_options(lua_State *L, int index)
         "deck_transition", "slide_numbers", "deck_center_front_text", "table_buffer_mode",
         "table_wire_mode", "write_trace", "html_font", "disable_embedded_font", "font_uri",
         "font_regular_uri", "font_italic_uri", "dump_font", "dump_font_force", "font_path",
-        "font_regular_path", "font_italic_path", NULL
+        "font_regular_path", "font_italic_path", "should_cancel", NULL
     };
     static const char *const font_fields[] = {
         "family", "regular_format", "regular_data", "italic_format", "italic_data", NULL
@@ -1903,6 +1903,22 @@ static int lua_mdf_pager_format_equals(const char *value, size_t value_len, cons
     return value_len == expected_len && memcmp(value, expected, expected_len) == 0;
 }
 
+static int lua_mdf_cancel_protected(lua_State *L)
+{
+    lua_mdf_callback_frame *frame = (lua_mdf_callback_frame *)lua_touserdata(L, 1);
+    lua_pushvalue(L, 2);
+    lua_call(L, 0, 1);
+    frame->ok = lua_toboolean(L, -1);
+    return 0;
+}
+
+static int lua_mdf_pager_cancel(void *userdata)
+{
+    lua_mdf_callback_frame frame = {0};
+    frame.ctx = (lua_mdf_callback_ctx *)userdata;
+    return !lua_mdf_protect(&frame, lua_mdf_cancel_protected) || frame.ok;
+}
+
 static int lua_mdf_pager(lua_State *L)
 {
     const char *path;
@@ -1911,6 +1927,8 @@ static int lua_mdf_pager(lua_State *L)
     mdf_pager_format format;
     mdf_status st;
     lua_mdf_failure failure = {0};
+    lua_mdf_callback_ctx cancel_ctx = {0};
+    mdf_pager_control control = {0};
 
     luaL_checkstack(L, 16, "libmdf callbacks");
     path = lua_mdf_cstring(L, 1);
@@ -1943,8 +1961,23 @@ static int lua_mdf_pager(lua_State *L)
         }
         lua_pop(L, 1);
         lua_mdf_apply_options(L, 2, &opts, &trace_ctx, 0);
+        lua_getfield(L, 2, "should_cancel");
+        if (!lua_isnil(L, -1)) {
+            luaL_checktype(L, -1, LUA_TFUNCTION);
+            cancel_ctx.L = L;
+            cancel_ctx.index = lua_gettop(L);
+            cancel_ctx.failure = &failure;
+            control.userdata = &cancel_ctx;
+            control.should_cancel = lua_mdf_pager_cancel;
+        } else lua_pop(L, 1);
     }
-    st = mdf_pager_file(path, &opts, format);
+    st = mdf_pager_file(path, &opts, format, &control);
+    lua_mdf_raise_callback(L, &failure);
+    if (st == MDF_CANCELLED) {
+        lua_pushboolean(L, 0);
+        lua_pushliteral(L, "cancelled");
+        return 2;
+    }
     if (st != MDF_OK) {
         return luaL_error(L, "mdf_pager: %s", mdf_status_string(st));
     }

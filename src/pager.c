@@ -22,11 +22,40 @@
 #define MDF_PAGER_TERMINATION_SIGNAL_COUNT 7
 #define MDF_PAGER_MIN_RENDER_WIDTH 3
 
+typedef struct mdf_pager_cancel_state {
+    const mdf_pager_control *control;
+    size_t work;
+    int requested;
+} mdf_pager_cancel_state;
+
+static int mdf_pager_cancel_check(mdf_pager_cancel_state *cancel)
+{
+    if (cancel == NULL) return 0;
+    if (!cancel->requested && cancel->control != NULL && cancel->control->should_cancel != NULL)
+        cancel->requested = cancel->control->should_cancel(cancel->control->userdata) != 0;
+    return cancel->requested;
+}
+
+/* Bound callback overhead while still checking CPU-bound view/search work. */
+static int mdf_pager_cancel_work(mdf_pager_cancel_state *cancel, size_t amount)
+{
+    if (cancel == NULL) return 0;
+    if (cancel->requested) return 1;
+    if (cancel->control == NULL || cancel->control->should_cancel == NULL) return 0;
+    if (amount < 4096 && cancel->work < 4096 - amount) {
+        cancel->work += amount;
+        return 0;
+    }
+    cancel->work = 0;
+    return mdf_pager_cancel_check(cancel);
+}
+
 typedef struct mdf_pager_buffer {
     char *data;
     size_t len;
     size_t cap;
     mdf_allocator allocator;
+    mdf_pager_cancel_state *cancel;
 } mdf_pager_buffer;
 
 typedef struct mdf_pager_buffer_source {
@@ -48,6 +77,9 @@ typedef struct mdf_pager_view {
     size_t *lines;
     size_t line_count;
     size_t line_cap;
+    size_t *soft_wraps;
+    size_t soft_wrap_len;
+    size_t soft_wrap_cap;
 } mdf_pager_view;
 
 typedef struct mdf_pager_reflow_state {
@@ -253,6 +285,7 @@ static int mdf_pager_buffer_append(mdf_pager_buffer *buffer, const char *src, si
     size_t next_cap;
     char *next;
 
+    if (mdf_pager_cancel_work(buffer->cancel, len)) return -1;
     if (len > (size_t)-1 - buffer->len - 1) {
         return -1;
     }
@@ -300,6 +333,7 @@ static mdf_status mdf_pager_read_file(int fd, mdf_pager_buffer *out)
     ssize_t n;
 
     for (;;) {
+        if (mdf_pager_cancel_check(out->cancel)) return MDF_CANCELLED;
         n = read(fd, chunk, sizeof(chunk));
         if (n > 0) {
             if (mdf_pager_buffer_append(out, chunk, (size_t)n) != 0) return MDF_ERROR_NOMEM;
@@ -319,7 +353,9 @@ static mdf_status mdf_pager_read_source(mdf_source *source, mdf_pager_buffer *ou
         size_t n;
 
         err = 0;
+        if (mdf_pager_cancel_check(out->cancel)) return MDF_CANCELLED;
         n = source->read(source->userdata, chunk, sizeof(chunk), &err);
+        if (mdf_pager_cancel_check(out->cancel)) return MDF_CANCELLED;
         if (n > sizeof(chunk) || err != 0) return MDF_ERROR_IO;
         if (n == 0) return MDF_OK;
         if (mdf_pager_buffer_append(out, chunk, n) != 0) return MDF_ERROR_NOMEM;
@@ -332,6 +368,10 @@ static size_t mdf_pager_buffer_source_read(void *userdata, char *dst, size_t cap
     size_t n;
 
     source = (mdf_pager_buffer_source *)userdata;
+    if (mdf_pager_cancel_check(source->buffer->cancel)) {
+        *err = 1;
+        return 0;
+    }
     if (source->offset >= source->buffer->len) {
         *err = 0;
         return 0;
@@ -590,10 +630,24 @@ static int mdf_pager_reflow_track_escape(mdf_pager_reflow_state *reflow, const c
 static int mdf_pager_reflow_append_wrap(mdf_pager_reflow_state *reflow)
 {
     static const char close[] = "\033]8;;\033\\";
+    mdf_pager_view *view;
+    size_t next_cap;
+    size_t *next;
 
+    view = reflow->view;
     if (reflow->osc8_active && mdf_pager_buffer_append(&reflow->view->bytes, close, sizeof(close) - 1) != 0) {
         return -1;
     }
+    if (view->soft_wrap_len == view->soft_wrap_cap) {
+        if (view->soft_wrap_cap > (size_t)-1 / 2) return -1;
+        next_cap = view->soft_wrap_cap == 0 ? 64 : view->soft_wrap_cap * 2;
+        next = (size_t *)mdf_pager_array_realloc(&view->allocator, view->soft_wraps,
+                                                 view->soft_wrap_cap, next_cap, sizeof(*next));
+        if (next == NULL) return -1;
+        view->soft_wraps = next;
+        view->soft_wrap_cap = next_cap;
+    }
+    view->soft_wraps[view->soft_wrap_len++] = view->bytes.len;
     if (mdf_pager_buffer_append_byte(&reflow->view->bytes, '\n') != 0) return -1;
     if (reflow->osc8_active &&
         mdf_pager_buffer_append(&reflow->view->bytes, reflow->osc8_start.data, reflow->osc8_start.len) != 0) {
@@ -646,7 +700,9 @@ static size_t mdf_pager_escape_end(const char *src, size_t len, size_t i)
 static int mdf_pager_view_build_searchable(mdf_pager_view *view)
 {
     size_t i;
+    size_t wrap;
 
+    wrap = 0;
     for (i = 0; i < view->bytes.len;) {
         size_t start;
         unsigned char byte;
@@ -657,7 +713,15 @@ static int mdf_pager_view_build_searchable(mdf_pager_view *view)
             i = mdf_pager_escape_end(view->bytes.data, view->bytes.len, i);
             continue;
         }
-        if (byte == '\n') byte = ' ';
+        if (byte == '\n') {
+            /* Display wraps do not insert characters into the logical text. */
+            if (wrap < view->soft_wrap_len && view->soft_wraps[wrap] == i) {
+                wrap++;
+                i++;
+                continue;
+            }
+            byte = ' ';
+        }
         if (mdf_pager_buffer_append_byte(&view->searchable, byte) != 0) return -1;
         if (view->searchable.len > view->search_offset_cap) {
             size_t next_cap;
@@ -681,7 +745,8 @@ static int mdf_pager_view_build_searchable(mdf_pager_view *view)
 }
 
 static int mdf_pager_search_equal(const char *haystack, size_t haystack_len, size_t at,
-                                  const char *needle, size_t needle_len, size_t *end)
+                                  const char *needle, size_t needle_len, size_t *end,
+                                  mdf_pager_cancel_state *cancel)
 {
     unsigned long haystack_folded[3];
     unsigned long needle_folded[3];
@@ -701,6 +766,7 @@ static int mdf_pager_search_equal(const char *haystack, size_t haystack_len, siz
     haystack_folded_index = 0;
     needle_folded_index = 0;
     for (;;) {
+        if (mdf_pager_cancel_work(cancel, 1)) return 0;
         if (needle_folded_index == needle_folded_len) {
             if (needle_offset == needle_len) {
                 if (haystack_folded_index != haystack_folded_len) return 0;
@@ -764,8 +830,9 @@ static int mdf_pager_view_find_anchor(const mdf_pager_view *view, const mdf_page
     for (i = 0; i < view->searchable.len; i++) {
         size_t distance;
 
+        if (mdf_pager_cancel_work(view->bytes.cancel, 1)) return -1;
         if (!mdf_pager_search_equal(view->searchable.data, view->searchable.len, i,
-                                    anchor->data, anchor->len, NULL)) continue;
+                                    anchor->data, anchor->len, NULL, view->bytes.cancel)) continue;
         distance = i > expected ? i - expected : expected - i;
         if (!found || distance < best_distance) {
             found = 1;
@@ -827,9 +894,10 @@ static int mdf_pager_search_refresh(mdf_pager_search *search, const mdf_pager_vi
     for (i = 0; i < view->searchable.len; i++) {
         size_t searchable_end;
 
+        if (mdf_pager_cancel_work(view->bytes.cancel, 1)) return -1;
         if (((unsigned char)view->searchable.data[i] & 0xc0) == 0x80) continue;
         if (mdf_pager_search_equal(view->searchable.data, view->searchable.len, i,
-                                   search->query.data, search->query.len, &searchable_end)) {
+                                   search->query.data, search->query.len, &searchable_end, view->bytes.cancel)) {
             size_t start;
             size_t end;
 
@@ -972,6 +1040,7 @@ static int mdf_pager_sanitize_markdown(const mdf_pager_buffer *input, mdf_pager_
         unsigned long codepoint;
         size_t unit_len;
 
+        if (mdf_pager_cancel_work(out->cancel, 1)) return -1;
         byte = (unsigned char)input->data[i];
         if ((byte < 32 && byte != '\n' && byte != '\r' && byte != '\t') || byte == 127 ||
             (byte >= 0x80 && byte <= 0x9f)) {
@@ -1295,6 +1364,7 @@ static void mdf_pager_view_destroy(mdf_pager_view *view)
     mdf_free_mem(&view->allocator, view->search_offsets,
                  view->search_offset_cap * sizeof(*view->search_offsets));
     mdf_free_mem(&view->allocator, view->lines, view->line_cap * sizeof(*view->lines));
+    mdf_free_mem(&view->allocator, view->soft_wraps, view->soft_wrap_cap * sizeof(*view->soft_wraps));
     memset(view, 0, sizeof(*view));
 }
 
@@ -1339,6 +1409,7 @@ static int mdf_pager_view_index(mdf_pager_view *view)
         return -1;
     }
     for (i = 0; i < view->bytes.len; i++) {
+        if (mdf_pager_cancel_work(view->bytes.cancel, 1)) return -1;
         if (view->bytes.data[i] == '\n' && i + 1 < view->bytes.len &&
             mdf_pager_view_add_line(view, i + 1) != 0) {
             return -1;
@@ -1658,17 +1729,20 @@ static int mdf_pager_read_with_timeout(unsigned char *out, long milliseconds)
 /* SIGWINCH may arrive after ESC (or ESC [) has already been consumed. Keep
  * the partial escape sequence and resume its bounded read instead of turning
  * the remaining bytes into unrelated pager input. */
-static int mdf_pager_read_sequence_byte(unsigned char *out, long milliseconds)
+static int mdf_pager_read_sequence_byte(unsigned char *out, long milliseconds,
+                                        mdf_pager_cancel_state *cancel)
 {
     int result;
 
     do {
+        if (mdf_pager_cancel_check(cancel) || mdf_pager_termination_signal != 0) return -1;
         result = mdf_pager_read_with_timeout(out, milliseconds);
+        if (mdf_pager_cancel_check(cancel) || mdf_pager_termination_signal != 0) return -1;
     } while (result == MDF_PAGER_READ_INTERRUPTED);
     return result;
 }
 
-static mdf_pager_key mdf_pager_read_key(unsigned char byte)
+static mdf_pager_key mdf_pager_read_key(unsigned char byte, mdf_pager_cancel_state *cancel)
 {
     unsigned char sequence[8];
     size_t len;
@@ -1684,12 +1758,12 @@ static mdf_pager_key mdf_pager_read_key(unsigned char byte)
     if (byte == 'g') return MDF_PAGER_KEY_HOME;
     if (byte == 'G') return MDF_PAGER_KEY_END;
     if (byte != 0x1b) return MDF_PAGER_KEY_NONE;
-    result = mdf_pager_read_sequence_byte(&byte, 25);
+    result = mdf_pager_read_sequence_byte(&byte, 25, cancel);
     if (result != 1) return MDF_PAGER_KEY_QUIT;
     if (byte != '[' && byte != 'O') return MDF_PAGER_KEY_NONE;
     len = 0;
     while (len < sizeof(sequence)) {
-        result = mdf_pager_read_sequence_byte(&byte, 10);
+        result = mdf_pager_read_sequence_byte(&byte, 10, cancel);
         if (result != 1) break;
         sequence[len++] = byte;
         if ((byte >= 'A' && byte <= 'Z') || byte == '~') break;
@@ -1709,7 +1783,8 @@ static mdf_pager_key mdf_pager_read_key(unsigned char byte)
 }
 
 static mdf_status mdf_pager_make_view(mdf_pager_view *view, const mdf_pager_buffer *input,
-                                      mdf_options *opts, int markdown, int styled, int width)
+                                      mdf_options *opts, int markdown, int styled, int width,
+                                      mdf_pager_cancel_state *cancel)
 {
     mdf_pager_buffer sanitized;
     mdf_pager_buffer_source source_data;
@@ -1722,6 +1797,8 @@ static mdf_status mdf_pager_make_view(mdf_pager_view *view, const mdf_pager_buff
 
     mdf_pager_view_destroy(view);
     mdf_pager_view_init(view, opts);
+    view->bytes.cancel = cancel;
+    view->searchable.cancel = cancel;
     if (!markdown) {
         if (mdf_pager_reflow(view, input->data == NULL ? "" : input->data, input->len, width, styled) != 0 ||
             mdf_pager_view_index(view) != 0 || mdf_pager_view_build_searchable(view) != 0) {
@@ -1734,6 +1811,7 @@ static mdf_status mdf_pager_make_view(mdf_pager_view *view, const mdf_pager_buff
     if (render_opts.ansi_mode == MDF_ANSI_AUTO) render_opts.ansi_mode = MDF_ANSI_ON;
     render_opts.width = mdf_pager_render_width(&render_opts, width);
     mdf_pager_buffer_init(&sanitized, opts);
+    sanitized.cancel = cancel;
     if (mdf_pager_sanitize_markdown(input, &sanitized) != 0) {
         mdf_pager_buffer_destroy(&sanitized);
         return MDF_ERROR_NOMEM;
@@ -1772,7 +1850,7 @@ static mdf_status mdf_pager_make_view(mdf_pager_view *view, const mdf_pager_buff
 static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
                                 const mdf_options *render_options, mdf_pager_format format,
                                 int styled_input, mdf_pager_ansi_rerender_fn rerender,
-                                void *rerender_userdata)
+                                void *rerender_userdata, mdf_pager_cancel_state *cancel)
 {
     struct termios saved_termios;
     struct sigaction old_winch;
@@ -1819,6 +1897,11 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
     mdf_allocator_prepare(&opts.allocator);
     if (rerender != NULL) mdf_pager_buffer_init(&rerendered_input, &opts);
     mdf_pager_search_init(&search, &opts);
+    rerendered_input.cancel = cancel;
+    if (mdf_pager_cancel_check(cancel)) {
+        result = MDF_CANCELLED;
+        goto done;
+    }
     markdown = format == MDF_PAGER_FORMAT_MARKDOWN ||
         (format == MDF_PAGER_FORMAT_AUTO && mdf_pager_is_markdown_path(name));
     mdf_pager_termination_signal = 0;
@@ -1864,7 +1947,7 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
         if (result != MDF_OK) goto done;
         view_input = &rerendered_input;
     }
-    result = mdf_pager_make_view(&view, view_input, &opts, markdown, styled_input, columns);
+    result = mdf_pager_make_view(&view, view_input, &opts, markdown, styled_input, columns, cancel);
     if (result != MDF_OK) goto done;
     top = 0;
     resize_pending = mdf_pager_winch_count != seen_winch;
@@ -1880,6 +1963,10 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
         unsigned char ready_byte;
         int ready;
 
+        if (mdf_pager_cancel_check(cancel)) {
+            result = MDF_CANCELLED;
+            goto done;
+        }
         if (mdf_pager_termination_signal != 0) {
             result = MDF_ERROR_IO;
             goto done;
@@ -1896,11 +1983,17 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
         }
         content_rows = (size_t)(rows - 1);
         max_top = view.line_count > content_rows ? view.line_count - content_rows : 0;
-        wait_ms = 1000;
+        wait_ms = cancel != NULL && cancel->control != NULL && cancel->control->should_cancel != NULL ? 50 : 1000;
         if (resize_pending) {
-            wait_ms = mdf_pager_resize_wait_ms(&last_winch);
+            long resize_wait;
+            resize_wait = mdf_pager_resize_wait_ms(&last_winch);
+            if (resize_wait < wait_ms) wait_ms = resize_wait;
         }
         ready = mdf_pager_read_with_timeout(&ready_byte, wait_ms);
+        if (mdf_pager_cancel_check(cancel)) {
+            result = MDF_CANCELLED;
+            goto done;
+        }
         if (mdf_pager_termination_signal != 0) {
             result = MDF_ERROR_IO;
             goto done;
@@ -1909,7 +2002,7 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
             mdf_pager_note_resize(&seen_winch, &resize_pending, &last_winch);
             continue;
         }
-        if (resize_pending && ready == 0) {
+        if (resize_pending && ready == 0 && mdf_pager_resize_wait_ms(&last_winch) == 0) {
             size_t anchor;
             size_t expected;
             size_t previous_searchable_len;
@@ -1941,7 +2034,7 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
                 }
                 view_input = &rerendered_input;
             }
-            result = mdf_pager_make_view(&view, view_input, &opts, markdown, styled_input, columns);
+            result = mdf_pager_make_view(&view, view_input, &opts, markdown, styled_input, columns, cancel);
             if (result != MDF_OK) {
                 mdf_pager_buffer_destroy(&anchor_text);
                 goto done;
@@ -2045,7 +2138,7 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
             redraw = 1;
             continue;
         }
-        key = mdf_pager_read_key(ready_byte);
+        key = mdf_pager_read_key(ready_byte, cancel);
         if (key == MDF_PAGER_KEY_QUIT) break;
         if (key == MDF_PAGER_KEY_DOWN && top < max_top) {
             top++;
@@ -2085,6 +2178,7 @@ static mdf_status mdf_pager_run(const char *name, const mdf_pager_buffer *input,
     result = MDF_OK;
 
 done:
+    if (cancel != NULL && cancel->requested) result = MDF_CANCELLED;
     if (termination_handlers_installed &&
         mdf_pager_block_termination_signals(&saved_termination_mask) == 0) {
         termination_signals_blocked = 1;
@@ -2111,13 +2205,15 @@ done:
     return result;
 }
 
-mdf_status mdf_pager_file(const char *path, const mdf_options *render_options, mdf_pager_format format)
+mdf_status mdf_pager_file(const char *path, const mdf_options *render_options, mdf_pager_format format,
+                          const mdf_pager_control *control)
 {
     struct stat st;
     mdf_pager_buffer input;
     mdf_options opts;
     mdf_status result;
     int fd;
+    mdf_pager_cancel_state cancel;
 
     if (!mdf_pager_arguments_valid(path, render_options, format)) {
         return MDF_ERROR_INVALID;
@@ -2136,23 +2232,30 @@ mdf_status mdf_pager_file(const char *path, const mdf_options *render_options, m
     if (render_options != NULL) opts = *render_options;
     mdf_allocator_prepare(&opts.allocator);
     mdf_pager_buffer_init(&input, &opts);
+    memset(&cancel, 0, sizeof(cancel));
+    cancel.control = control;
+    input.cancel = &cancel;
     result = mdf_pager_read_file(fd, &input);
+    if (cancel.requested) result = MDF_CANCELLED;
     if (close(fd) != 0 && result == MDF_OK) result = MDF_ERROR_IO;
     if (result != MDF_OK) {
         mdf_pager_buffer_destroy(&input);
+        mdf_pager_release_emission_buffer(&opts);
         return result;
     }
-    result = mdf_pager_run(path, &input, &opts, format, 0, NULL, NULL);
+    result = mdf_pager_run(path, &input, &opts, format, 0, NULL, NULL, &cancel);
     mdf_pager_buffer_destroy(&input);
     return result;
 }
 
 mdf_status mdf_pager_source(const char *name, mdf_source *source,
-                            const mdf_options *render_options, mdf_pager_format format)
+                            const mdf_options *render_options, mdf_pager_format format,
+                            const mdf_pager_control *control)
 {
     mdf_pager_buffer input;
     mdf_options opts;
     mdf_status result;
+    mdf_pager_cancel_state cancel;
 
     if (source == NULL || source->read == NULL ||
         !mdf_pager_arguments_valid(name, render_options, format)) {
@@ -2164,12 +2267,17 @@ mdf_status mdf_pager_source(const char *name, mdf_source *source,
     if (render_options != NULL) opts = *render_options;
     mdf_allocator_prepare(&opts.allocator);
     mdf_pager_buffer_init(&input, &opts);
+    memset(&cancel, 0, sizeof(cancel));
+    cancel.control = control;
+    input.cancel = &cancel;
     result = mdf_pager_read_source(source, &input);
+    if (cancel.requested) result = MDF_CANCELLED;
     if (result != MDF_OK) {
         mdf_pager_buffer_destroy(&input);
+        mdf_pager_release_emission_buffer(&opts);
         return result;
     }
-    result = mdf_pager_run(name, &input, &opts, format, 0, NULL, NULL);
+    result = mdf_pager_run(name, &input, &opts, format, 0, NULL, NULL, &cancel);
     mdf_pager_buffer_destroy(&input);
     return result;
 }
@@ -2188,5 +2296,5 @@ mdf_status mdf_pager_ansi_rerendered(const char *name, const mdf_options *render
     mdf_options_init(&opts);
     if (render_options != NULL) opts = *render_options;
     mdf_allocator_prepare(&opts.allocator);
-    return mdf_pager_run(name, NULL, &opts, MDF_PAGER_FORMAT_TEXT, 1, rerender, userdata);
+    return mdf_pager_run(name, NULL, &opts, MDF_PAGER_FORMAT_TEXT, 1, rerender, userdata, NULL);
 }

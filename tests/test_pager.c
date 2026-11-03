@@ -435,6 +435,188 @@ static size_t pager_view_oom_source_read(void *userdata, char *dst, size_t cap, 
     return source->len;
 }
 
+typedef struct pager_cancel_probe {
+    int fd;
+    int phase;
+    int requested;
+    int reads;
+    int eof;
+    int checks_after_eof;
+    size_t remaining;
+    mdf *receiver;
+    int reentry_checked;
+    int reentry_failed;
+    void *owned_emission;
+    int owned_released;
+} pager_cancel_probe;
+
+static void *pager_cancel_alloc(void *userdata, size_t size)
+{
+    (void)userdata;
+    return malloc(size);
+}
+
+static void *pager_cancel_realloc(void *userdata, void *ptr, size_t old_size, size_t new_size)
+{
+    pager_cancel_probe *probe;
+    void *next;
+    int owned;
+
+    (void)old_size;
+    probe = (pager_cancel_probe *)userdata;
+    owned = ptr == probe->owned_emission;
+    next = realloc(ptr, new_size);
+    if (owned && next != NULL) probe->owned_emission = next;
+    return next;
+}
+
+static void pager_cancel_free(void *userdata, void *ptr, size_t size)
+{
+    pager_cancel_probe *probe;
+
+    (void)size;
+    probe = (pager_cancel_probe *)userdata;
+    if (ptr == probe->owned_emission) {
+        probe->owned_emission = NULL;
+        probe->owned_released++;
+    }
+    free(ptr);
+}
+
+static int pager_cancel_requested(void *userdata)
+{
+    pager_cancel_probe *probe;
+    char byte;
+
+    probe = (pager_cancel_probe *)userdata;
+    if (probe->receiver != NULL && !probe->reentry_checked) {
+        probe->reentry_checked = 1;
+        if (probe->receiver->reset(probe->receiver) != MDF_ERROR_INVALID ||
+            probe->receiver->pager_file(probe->receiver, "unused", MDF_PAGER_FORMAT_TEXT, NULL) != MDF_ERROR_INVALID)
+            probe->reentry_failed = 1;
+        probe->receiver->destroy(probe->receiver);
+    }
+    if (probe->phase == 3) return 1;
+    if ((probe->phase == 2 || probe->phase == 4) && probe->eof &&
+        ++probe->checks_after_eof >= (probe->phase == 4 ? 40 : 4)) return 1;
+    if (probe->fd >= 0 && read(probe->fd, &byte, 1) == 1) probe->requested = 1;
+    return probe->requested;
+}
+
+static size_t pager_cancel_source_read(void *userdata, char *dst, size_t cap, int *err)
+{
+    pager_cancel_probe *probe;
+    size_t n;
+
+    probe = (pager_cancel_probe *)userdata;
+    *err = 0;
+    if (probe->remaining == 0) { probe->eof = 1; return 0; }
+    if (probe->phase == 5) {
+        if (cap < 13) { *err = 1; return 0; }
+        memcpy(dst, "abcdefghijkl\n", 13);
+        probe->remaining = 0;
+        probe->reads++;
+        return 13;
+    }
+    n = probe->remaining < cap ? probe->remaining : cap;
+    memset(dst, 'x', n);
+    dst[n - 1] = '\n';
+    probe->remaining -= n;
+    probe->reads++;
+    if (probe->phase == 1) probe->requested = 1;
+    return n;
+}
+
+static pid_t start_cancelable_pager(const char *path, int from_source, int receiver,
+                                    int phase, mdf_pager_format format, int *master, int *cancel_fd)
+{
+    static const char text[] = "Literal **log**\nabcdefghijklmnopqrstuvwxyz01234567890123456789012345\nneedle entry\n";
+    int control_pipe[2];
+    struct winsize size;
+    pid_t pid;
+
+    if (pipe(control_pipe) != 0) return -1;
+    memset(&size, 0, sizeof(size));
+    size.ws_col = 20;
+    size.ws_row = 10;
+    pid = forkpty(master, NULL, NULL, &size);
+    if (pid != 0) {
+        close(control_pipe[0]);
+        *cancel_fd = control_pipe[1];
+        return pid;
+    }
+    {
+        pager_cancel_probe probe;
+        pager_source source_data;
+        mdf_pager_control control;
+        mdf_options opts;
+        mdf_source source;
+        mdf_status status;
+        struct sigaction before_term, before_winch, after;
+        char *rendered;
+        int ok;
+
+        close(control_pipe[1]);
+        if (fcntl(control_pipe[0], F_SETFL, O_NONBLOCK) != 0) _exit(2);
+        memset(&probe, 0, sizeof(probe));
+        probe.fd = control_pipe[0];
+        probe.phase = phase;
+        probe.remaining = 65536;
+        control.userdata = &probe;
+        control.should_cancel = pager_cancel_requested;
+        mdf_options_init(&opts);
+        opts.ansi_mode = MDF_ANSI_OFF;
+        opts.allocator.userdata = &probe;
+        opts.allocator.alloc = pager_cancel_alloc;
+        opts.allocator.realloc = pager_cancel_realloc;
+        opts.allocator.free = pager_cancel_free;
+        if (sigaction(SIGTERM, NULL, &before_term) != 0 || sigaction(SIGWINCH, NULL, &before_winch) != 0) _exit(2);
+        opts.emission_buffer.data = malloc(128);
+        if (opts.emission_buffer.data == NULL) _exit(2);
+        opts.emission_buffer.cap = 128;
+        opts.emission_buffer.take_ownership = 1;
+        probe.owned_emission = opts.emission_buffer.data;
+        if (phase == 5) {
+            opts.emission_buffer.max_cap = 8;
+            opts.emission_buffer.fixed = 1;
+        }
+        if (receiver) {
+            if (mdf_create(MDF_FORMAT_ANSI, &opts, &probe.receiver) != MDF_OK) _exit(2);
+        }
+        memset(&source_data, 0, sizeof(source_data));
+        source_data.data = text;
+        source_data.len = sizeof(text) - 1;
+        source_data.chunk = 4096;
+        source.userdata = phase == 0 ? (void *)&source_data : (void *)&probe;
+        source.read = phase == 0 ? pager_source_read : pager_cancel_source_read;
+        if (receiver) {
+            status = from_source ? probe.receiver->pager_source(probe.receiver, "log.md", &source, format, &control) :
+                                   probe.receiver->pager_file(probe.receiver, path, format, &control);
+        } else {
+            status = from_source ? mdf_pager_source("log.md", &source, &opts, format, &control) :
+                                   mdf_pager_file(path, &opts, format, &control);
+        }
+        ok = status == MDF_CANCELLED && !probe.reentry_failed;
+        if (phase == 5) ok = status != MDF_OK && status != MDF_CANCELLED && !probe.reentry_failed;
+        if (phase == 1) ok = ok && probe.reads == 1;
+        if (phase == 3) ok = ok && probe.reads == 0;
+        if (phase == 2) ok = ok && probe.checks_after_eof == 4;
+        if (phase == 4) ok = ok && probe.checks_after_eof == 40;
+        if (sigaction(SIGTERM, NULL, &after) != 0 || after.sa_handler != before_term.sa_handler) ok = 0;
+        if (sigaction(SIGWINCH, NULL, &after) != 0 || after.sa_handler != before_winch.sa_handler) ok = 0;
+        if (probe.receiver != NULL) {
+            rendered = NULL;
+            if (probe.receiver->render_cstr(probe.receiver, "ok\n", &rendered) != MDF_OK ||
+                rendered == NULL || strstr(rendered, "ok") == NULL) ok = 0;
+            probe.receiver->string_free(probe.receiver, rendered);
+            probe.receiver->destroy(probe.receiver);
+        }
+        ok = ok && probe.owned_released == 1;
+        close(control_pipe[0]);
+        _exit(ok ? 0 : 1);
+    }
+}
+
 static pid_t start_pager_at_size(const char *cmdf, const char *path, int direct, int osc8, int traced,
                                  unsigned short columns, unsigned short rows, int *master)
 {
@@ -452,7 +634,7 @@ static pid_t start_pager_at_size(const char *cmdf, const char *path, int direct,
         mdf_options_init(&opts);
         opts.osc8 = osc8;
         if (traced) opts.write_trace.emit = ignored_trace_emit;
-        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_AUTO) == MDF_OK ? 0 : 1);
+        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_AUTO, NULL) == MDF_OK ? 0 : 1);
     }
     execl(cmdf, cmdf, "-p", path, (char *)NULL);
     _exit(127);
@@ -461,6 +643,37 @@ static pid_t start_pager_at_size(const char *cmdf, const char *path, int direct,
 static pid_t start_pager(const char *cmdf, const char *path, int direct, int osc8, int traced, int *master)
 {
     return start_pager_at_size(cmdf, path, direct, osc8, traced, 40, 10, master);
+}
+
+static pid_t start_selected_pager(const char *cmdf, const char *path, const char *format,
+                                  int incremental, int *master)
+{
+    struct winsize size;
+    pid_t pid;
+
+    memset(&size, 0, sizeof(size));
+    size.ws_col = 40;
+    size.ws_row = 10;
+    pid = forkpty(master, NULL, NULL, &size);
+    if (pid != 0) return pid;
+    if (incremental) execl(cmdf, cmdf, "--pager", "--pager-format", format, "--incremental", path, (char *)NULL);
+    else execl(cmdf, cmdf, "--pager", "--pager-format", format, path, (char *)NULL);
+    _exit(127);
+}
+
+static pid_t start_lua_pager(const char *lua, const char *script, const char *path,
+                             const char *mode, int *master)
+{
+    struct winsize size;
+    pid_t pid;
+
+    memset(&size, 0, sizeof(size));
+    size.ws_col = 40;
+    size.ws_row = 10;
+    pid = forkpty(master, NULL, NULL, &size);
+    if (pid != 0) return pid;
+    execl(lua, lua, script, path, mode, (char *)NULL);
+    _exit(127);
 }
 
 static pid_t start_incremental_pager(const char *cmdf, const char *path, int *master)
@@ -491,7 +704,7 @@ static pid_t start_pager_with_expected_status(const char *path, mdf_status expec
         mdf_options opts;
 
         mdf_options_init(&opts);
-        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_AUTO) == expected ? 0 : 1);
+        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_AUTO, NULL) == expected ? 0 : 1);
     }
 }
 
@@ -510,7 +723,7 @@ static pid_t start_pager_with_theme(const char *path, const char *theme_name, in
 
         mdf_options_init(&opts);
         opts.theme_name = theme_name;
-        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_TEXT) == MDF_OK ? 0 : 1);
+        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_TEXT, NULL) == MDF_OK ? 0 : 1);
     }
 }
 
@@ -536,7 +749,7 @@ static pid_t start_pager_source(const char *name, const char *data, size_t len, 
         source_data.chunk = 2;
         source.userdata = &source_data;
         source.read = pager_source_read;
-        _exit(mdf_pager_source(name, &source, &opts, MDF_PAGER_FORMAT_AUTO) == MDF_OK ? 0 : 1);
+        _exit(mdf_pager_source(name, &source, &opts, MDF_PAGER_FORMAT_AUTO, NULL) == MDF_OK ? 0 : 1);
     }
 }
 
@@ -567,7 +780,7 @@ static pid_t start_pager_source_with_oom(int *master)
         opts.allocator.alloc = pager_failing_alloc;
         opts.allocator.realloc = pager_failing_realloc;
         opts.allocator.free = pager_failing_free;
-        _exit(mdf_pager_source("oom.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT) == MDF_ERROR_NOMEM ? 0 : 1);
+        _exit(mdf_pager_source("oom.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT, NULL) == MDF_ERROR_NOMEM ? 0 : 1);
     }
 }
 
@@ -605,7 +818,7 @@ static pid_t start_pager_source_with_view_oom(int markdown, int *master)
         opts.allocator.free = pager_failing_free;
         alarm(2);
         _exit(mdf_pager_source(markdown ? "oom.md" : "oom.txt", &source, &opts,
-                               markdown ? MDF_PAGER_FORMAT_MARKDOWN : MDF_PAGER_FORMAT_TEXT) == MDF_ERROR_NOMEM ? 0 : 1);
+                               markdown ? MDF_PAGER_FORMAT_MARKDOWN : MDF_PAGER_FORMAT_TEXT, NULL) == MDF_ERROR_NOMEM ? 0 : 1);
     }
 }
 
@@ -636,7 +849,7 @@ static pid_t start_pager_with_allocator_route_probe(pager_route_allocator *alloc
         opts.allocator.userdata = allocator;
         opts.allocator.alloc = pager_route_alloc;
         opts.allocator.free = pager_route_free;
-        status = mdf_pager_source("allocator.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT);
+        status = mdf_pager_source("allocator.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT, NULL);
         _exit(status == MDF_ERROR_NOMEM && allocator->foreign_free == 0 &&
               allocator->active_count == 0 ? 0 : 1);
     }
@@ -675,7 +888,7 @@ static pid_t start_pager_with_handler_install_failure(pager_route_allocator *all
         opts.emission_buffer.take_ownership = 1;
 #ifdef LIBMDF_PAGER_TESTING
         mdf_pager_test_set_termination_handler_install_failure(1);
-        status = mdf_pager_source("handler-failure.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT);
+        status = mdf_pager_source("handler-failure.txt", &source, &opts, MDF_PAGER_FORMAT_TEXT, NULL);
         mdf_pager_test_set_termination_handler_install_failure(0);
         _exit(status == MDF_ERROR_IO && allocator->foreign_free == 0 &&
               allocator->active_count == 0 ? 0 : 1);
@@ -704,7 +917,7 @@ static pid_t start_pager_with_owned_emission_buffer(const char *path, int *maste
         if (opts.emission_buffer.data == NULL) _exit(1);
         opts.emission_buffer.cap = 128;
         opts.emission_buffer.take_ownership = 1;
-        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_MARKDOWN) == MDF_OK ? 0 : 1);
+        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_MARKDOWN, NULL) == MDF_OK ? 0 : 1);
     }
 }
 
@@ -728,7 +941,7 @@ static pid_t start_pager_with_fixed_owned_emission_buffer(const char *path,
         opts.emission_buffer.cap = 32;
         opts.emission_buffer.fixed = 1;
         opts.emission_buffer.take_ownership = 1;
-        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_MARKDOWN) == MDF_OK ? 0 : 1);
+        _exit(mdf_pager_file(path, &opts, MDF_PAGER_FORMAT_MARKDOWN, NULL) == MDF_OK ? 0 : 1);
     }
 }
 
@@ -1230,13 +1443,15 @@ int main(int argc, char **argv)
     int master;
     int rc;
     int i;
+    int mode;
+    int cancel_fd;
     struct winsize resized;
     struct timespec resize_started;
     struct timespec resize_finished;
     pager_route_allocator *route_allocator;
     const char *stage;
 
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 4 && !(argc == 3 && strcmp(argv[2], "--features") == 0)) return 2;
     memset(&out, 0, sizeof(out));
     route_allocator = MAP_FAILED;
     missing_path[0] = '\0';
@@ -1290,6 +1505,92 @@ int main(int argc, char **argv)
     if (snprintf(missing_path, sizeof(missing_path), LIBMDF_TEST_SCRATCH_DIR "/libmdf-pager-missing-XXXXXX") >= (int)sizeof(missing_path) ||
         (fd = mkstemp(missing_path)) < 0 || close(fd) != 0 || unlink(missing_path) != 0) goto done;
 
+    for (mode = 0; mode < (argc == 4 ? 2 : 4); mode++) {
+        stage = "explicit CLI pager text/markdown format, ordinary and incremental";
+        pid = start_selected_pager(argv[1], mode & 1 ? text_path : markdown_path,
+                                   mode & 1 ? "markdown" : "text", mode & 2, &master);
+        if (pid < 0 || wait_for_redraw(master, &out, mode & 1 ? "raw heading" : "# rendered heading") != 0 ||
+            (mode & 1 && strstr(out.data, "**literal**") != NULL) ||
+            write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0 || !terminal_is_cooked(master)) goto done;
+        close(master);
+        clear_capture(&out);
+    }
+    if (argc == 4) {
+        for (mode = 0; mode < 3; mode++) {
+            stage = "Lua pager cancellation and callback error cleanup";
+            pid = start_lua_pager(argv[2], argv[3], text_path,
+                                  mode == 0 ? "cancel" : (mode == 1 ? "error" : "early"), &master);
+            if (pid < 0 || wait_for_exit(pid) != 0 || wait_for_output(master, &out, 40) != 0 ||
+                require_contains(&out, "LUA_PAGER_DONE") != 0 || !terminal_is_cooked(master)) goto done;
+            if (mode < 2 && (require_contains(&out, "\033[?1049h") != 0 ||
+                             require_contains(&out, "\033[?1049l") != 0)) goto done;
+            if (mode == 2 && strstr(out.data, "\033[?1049h") != NULL) goto done;
+            close(master);
+            clear_capture(&out);
+        }
+        rc = 0;
+        goto done;
+    }
+    for (mode = 0; mode < 8; mode++) {
+        mdf_pager_format pager_format;
+        const char *path;
+        const char *marker;
+
+        pager_format = mode & 4 ? MDF_PAGER_FORMAT_MARKDOWN : MDF_PAGER_FORMAT_TEXT;
+        path = mode & 4 ? markdown_path : text_path;
+        marker = mode & 1 ? "Literal" : (mode & 4 ? "rendered heading" : "# raw heading");
+        stage = "cooperative cancellation in search, free/receiver file/source";
+        pid = start_cancelable_pager(path, mode & 1, mode & 2, 0, pager_format, &master, &cancel_fd);
+        if (pid < 0 || wait_for_redraw(master, &out, marker) != 0) goto done;
+        if (mode == 1 && (require_contains(&out, "**log**") != 0 ||
+                         require_contains(&out, "abcdefghijklmnopqrst") != 0)) goto done;
+        clear_capture(&out);
+        if (mode == 1) {
+            stage = "text search crosses a hard-wrap boundary";
+            if (write_all(master, "/stuv", 5) != 0 ||
+                wait_for_redraw(master, &out, "\033[7muv\033[27m") != 0 ||
+                require_contains(&out, "abcdefghijklmnopqr\033[7mst\033[27m") != 0) goto done;
+            clear_capture(&out);
+            if (write_all(master, "q", 1) != 0 || wait_for_redraw(master, &out, "abcdefghijklmnopqrst") != 0) goto done;
+            clear_capture(&out);
+        }
+        if (mode == 0) {
+            stage = "cancellation during a partial escape key";
+            if (write_all(master, "\033[", 2) != 0) goto done;
+        } else if (mode == 2) {
+            stage = "cancellation during a pending resize";
+            memset(&resized, 0, sizeof(resized));
+            resized.ws_col = 30;
+            resized.ws_row = 10;
+            if (ioctl(master, TIOCSWINSZ, &resized) != 0 || kill(pid, SIGWINCH) != 0) goto done;
+        } else if (write_all(master, "/", 1) != 0 || wait_for_marker(master, &out, "  /") != 0) goto done;
+        if (write_all(cancel_fd, "x", 1) != 0 || wait_for_exit(pid) != 0 ||
+            wait_for_marker(master, &out, "\033[?1049l") != 0 || !terminal_is_cooked(master)) goto done;
+        close(cancel_fd);
+        close(master);
+        clear_capture(&out);
+    }
+    for (mode = 0; mode < 11; mode++) {
+        int phase;
+        mdf_pager_format pager_format;
+
+        phase = mode < 4 ? (mode & 1 ? 3 : 1) : (mode < 8 ? 2 : (mode < 10 ? 4 : 5));
+        pager_format = mode >= 8 || mode & 1 ? MDF_PAGER_FORMAT_MARKDOWN : MDF_PAGER_FORMAT_TEXT;
+        stage = "cooperative cancellation before input, during input and during view generation";
+        pid = start_cancelable_pager(text_path, 1, mode == 10 ? 1 : (mode >= 8 ? mode & 1 : mode & 2),
+                                     phase, pager_format, &master, &cancel_fd);
+        if (pid < 0 || wait_for_exit(pid) != 0 || wait_for_output(master, &out, 40) != 0 ||
+            !terminal_is_cooked(master)) goto done;
+        if (phase == 2 || phase == 4 || phase == 5) {
+            if (require_contains(&out, "\033[?1049h") != 0 || require_contains(&out, "\033[?1049l") != 0 ||
+                strstr(out.data, "\033[H\033[2J") != NULL) goto done;
+        } else if (out.len != 0) goto done;
+        close(cancel_fd);
+        close(master);
+        clear_capture(&out);
+    }
+
+    if (argc == 3) { rc = 0; goto done; }
     stage = "text startup";
     pid = start_pager(argv[1], text_path, 1, 0, 0, &master);
     if (pid < 0 || wait_for_marker(master, &out, "# raw heading") != 0 ||
@@ -1932,7 +2233,10 @@ int main(int argc, char **argv)
     rc = 0;
 
 done:
-    if (rc != 0) fprintf(stderr, "test_pager failed at %s\n", stage);
+    if (rc != 0) {
+        fprintf(stderr, "test_pager failed at %s\n", stage);
+        if (out.len > 0) fwrite(out.data, 1, out.len, stderr);
+    }
     unlink(text_path);
     unlink(markdown_path);
     unlink(osc8_path);

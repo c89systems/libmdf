@@ -216,6 +216,10 @@ if(LIBMDF_BUILD_TESTS)
     # The terminal pager runs after forkpty. Keep this integration test separate
     # from the normal unit suite so it can retain a focused timeout and label.
     set_tests_properties(test_pager PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 30)
+    add_test(NAME memory_pager COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --features)
+    set_tests_properties(memory_pager PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 120)
 
     add_executable(test_pager_ratio tests/test_pager_ratio.c)
     libmdf_configure_development_runtime(test_pager_ratio)

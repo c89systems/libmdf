@@ -42,6 +42,7 @@ local function usage()
   io.stderr:write("      --ansi MODE            Escape policy: auto|on|off (default auto)\\n")
   io.stderr:write("  -b, --boring               Boring ANSI output\\n")
   io.stderr:write("  -p, --pager                Page a named file interactively\\n")
+  io.stderr:write("      --pager-format MODE    Pager input: auto|text|markdown (text hard-wraps)\\n")
   io.stderr:write("  -o, --output PATH          Output file\\n")
   io.stderr:write("  -t, --theme NAME           Theme name\\n")
   io.stderr:write("  -T, --title TITLE          HTML document title\\n")
@@ -64,7 +65,7 @@ local function usage()
   io.stderr:write("  -x, --transition MODE      Deck transition: fade|cross|hard\\n")
   io.stderr:write("      --slide-numbers        Show deck slide numbers after the first slide\\n")
   io.stderr:write("      --deck-center-front-text Center-align first-slide paragraph text\\n")
-  io.stderr:write("      --table-buffer MODE    Table buffering mode: full|row\\n")
+  io.stderr:write("      --table-buffer MODE    Table buffering: full (adaptive)|row\\n")
   io.stderr:write("      --table-wire MODE      Table wire mode: line|ascii|space\\n")
   io.stderr:write("      --simulate             Simulate input streaming with default chunk\\n")
   io.stderr:write("      --simulate-chunk N     Simulate input streaming with max N bytes per read\\n")
@@ -83,6 +84,7 @@ local simulate_enabled = false
 local simulate_chunk = nil
 local simulate_delay_seconds = 0
 local pager_requested = false
+local pager_format = nil
 local i = 1
 
 local function parse_duration_seconds(s)
@@ -160,6 +162,12 @@ while i <= #arg do
     opts.boring = true
   elseif a == "-p" or a == "--pager" then
     pager_requested = true
+  elseif a == "--pager-format" then
+    i = i + 1
+    pager_format = arg[i]
+    if pager_format ~= "auto" and pager_format ~= "text" and pager_format ~= "markdown" then
+      error("cmdf.lua: invalid pager format (expected auto|text|markdown)", 0)
+    end
   elseif a == "-w" or a == "--width" then
     i = i + 1
     opts.width = tonumber(arg[i])
@@ -389,6 +397,9 @@ if trace_path and html_like then
   error("cmdf.lua: --trace-writes is only supported for ANSI output", 0)
 end
 
+if pager_format and not pager_requested then
+  error("cmdf.lua: --pager-format requires --pager", 0)
+end
 if pager_requested then
   if not input_path then
     error("cmdf.lua: --pager requires a named input file", 0)
@@ -396,6 +407,7 @@ if pager_requested then
   if output_path or html_like or trace_path or simulate_enabled or simulate_chunk or simulate_delay_seconds > 0 then
     error("cmdf.lua: --pager is only supported with ANSI file input and no output, trace, or simulation options", 0)
   end
+  if pager_format and pager_format ~= "auto" then opts.format = pager_format end
   mdf.pager(input_path, opts)
   os.exit(0)
 end

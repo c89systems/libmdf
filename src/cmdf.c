@@ -324,7 +324,7 @@ static mdf_status render_incremental_pager_file(void *userdata, const mdf_option
     return st;
 }
 
-static int run_incremental_pager_file(const char *path, const mdf_options *opts)
+static int run_incremental_pager_file(const char *path, const mdf_options *opts, mdf_pager_format pager_format)
 {
     struct stat input_st;
     mdf_status st;
@@ -344,8 +344,9 @@ static int run_incremental_pager_file(const char *path, const mdf_options *opts)
         fprintf(stderr, "cmdf: close input: %s\n", strerror(errno));
         return 1;
     }
-    if (!has_markdown_extension(path)) {
-        st = mdf_pager_file(path, opts, MDF_PAGER_FORMAT_TEXT);
+    if (pager_format == MDF_PAGER_FORMAT_TEXT ||
+        (pager_format == MDF_PAGER_FORMAT_AUTO && !has_markdown_extension(path))) {
+        st = mdf_pager_file(path, opts, MDF_PAGER_FORMAT_TEXT, NULL);
         if (st != MDF_OK) {
             fprintf(stderr, "cmdf: pager: %s\n", mdf_status_string(st));
             return 1;
@@ -449,6 +450,7 @@ static void usage(FILE *fp)
     fprintf(fp, "      --ansi MODE            Escape policy: auto|on|off (default auto)\n");
     fprintf(fp, "  -b, --boring               Boring ANSI output\n");
     fprintf(fp, "  -p, --pager                Page a named file interactively\n");
+    fprintf(fp, "      --pager-format MODE    Pager input: auto|text|markdown (text hard-wraps)\n");
     fprintf(fp, "  -o, --output PATH          Output file\n");
     fprintf(fp, "  -t, --theme NAME           Theme name\n");
     fprintf(fp, "  -T, --title TITLE          HTML document title\n");
@@ -470,7 +472,7 @@ static void usage(FILE *fp)
     fprintf(fp, "  -x, --transition MODE      Deck transition: fade|cross|hard\n");
     fprintf(fp, "      --slide-numbers        Show deck slide numbers after the first slide\n");
     fprintf(fp, "      --deck-center-front-text Center-align first-slide paragraph text\n");
-    fprintf(fp, "      --table-buffer MODE    Table buffering mode: full|row\n");
+    fprintf(fp, "      --table-buffer MODE    Table buffering: full (adaptive)|row\n");
     fprintf(fp, "      --table-wire MODE      Table wire mode: line|ascii|space\n");
     fprintf(fp, "      --simulate             Simulate input streaming with default chunk\n");
     fprintf(fp, "      --simulate-chunk N     Simulate input streaming with max N bytes per read\n");
@@ -712,6 +714,8 @@ int main(int argc, char **argv)
     char output_italic_font_path[4096];
     int html_font_dump_requested;
     int pager_requested;
+    mdf_pager_format pager_format;
+    int pager_format_seen;
     int output_fd;
     struct stat output_stat;
     static const struct option long_options[] = {
@@ -724,6 +728,7 @@ int main(int argc, char **argv)
         {"ansi", required_argument, NULL, 1023},
         {"boring", no_argument, NULL, 'b'},
         {"pager", no_argument, NULL, 'p'},
+        {"pager-format", required_argument, NULL, 1025},
         {"output", required_argument, NULL, 'o'},
         {"theme", required_argument, NULL, 't'},
         {"title", required_argument, NULL, 'T'},
@@ -797,6 +802,8 @@ int main(int argc, char **argv)
     memset(&trace_data, 0, sizeof(trace_data));
     opterr = 0;
     pager_requested = 0;
+    pager_format = MDF_PAGER_FORMAT_AUTO;
+    pager_format_seen = 0;
     while ((opt = getopt_long(argc, argv, "hVHbpo:t:T:w:8:S:x:", long_options, NULL)) != -1) {
         switch (opt) {
         case 'h':
@@ -831,6 +838,16 @@ int main(int argc, char **argv)
             break;
         case 'p':
             pager_requested = 1;
+            break;
+        case 1025:
+            pager_format_seen = 1;
+            if (strcmp(optarg, "auto") == 0) pager_format = MDF_PAGER_FORMAT_AUTO;
+            else if (strcmp(optarg, "text") == 0) pager_format = MDF_PAGER_FORMAT_TEXT;
+            else if (strcmp(optarg, "markdown") == 0) pager_format = MDF_PAGER_FORMAT_MARKDOWN;
+            else {
+                fprintf(stderr, "cmdf: invalid pager format (expected auto|text|markdown)\n");
+                return 2;
+            }
             break;
         case 'o':
             out_path = optarg;
@@ -1104,6 +1121,10 @@ int main(int argc, char **argv)
         return 2;
     }
     in_path = argc - optind == 1 ? argv[optind] : NULL;
+    if (pager_format_seen && !pager_requested) {
+        fprintf(stderr, "cmdf: --pager-format requires --pager\n");
+        return 2;
+    }
     if (pager_requested) {
         if (in_path == NULL) {
             fprintf(stderr, "cmdf: --pager requires a named input file\n");
@@ -1115,9 +1136,9 @@ int main(int argc, char **argv)
             return 2;
         }
         if (incremental_enabled) {
-            return run_incremental_pager_file(in_path, &opts);
+            return run_incremental_pager_file(in_path, &opts, pager_format);
         }
-        st = mdf_pager_file(in_path, &opts, MDF_PAGER_FORMAT_AUTO);
+        st = mdf_pager_file(in_path, &opts, pager_format, NULL);
         if (st != MDF_OK) {
             fprintf(stderr, "cmdf: pager: %s\n", mdf_status_string(st));
             return 1;

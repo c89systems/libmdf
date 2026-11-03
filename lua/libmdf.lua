@@ -30,7 +30,7 @@ local mdf = {}
 ---@field deck_transition? "fade"|"cross"|"hard" Deck slide transition.
 ---@field slide_numbers? boolean Show deck slide numbers after the first slide.
 ---@field deck_center_front_text? boolean Center first-slide paragraph text.
----@field table_buffer_mode? "full"|"row" ANSI table policy; HTML always retains the full table.
+---@field table_buffer_mode? "full"|"row" ANSI/HTML table policy; full automatically streams at the retention limits.
 ---@field table_wire_mode? "line"|"ascii"|"space" Table border style.
 ---@field write_trace? libmdf.Trace Observe completed ANSI sink writes.
 ---@field html_font? libmdf.FontOptions Custom embedded HTML/deck faces.
@@ -142,10 +142,12 @@ end
 ---`set_geometry(width, left, right)` preserves the active document and emits
 ---nothing itself; new left margins start on future lines if the current line
 ---already contains emitted text. `write` consumes each fragment without
----waiting for future input, but full-buffer ANSI tables emit only at their
----terminating line or EOF, using the then-current geometry. Row-buffered ANSI
----tables emit after the header and first row (or two headerless rows), then
----refit later rows and the closing border without replaying emitted rows.
+---waiting for future input. Full-buffer ANSI/HTML tables emit at their
+---terminating line, EOF or retention limit; at the limit subsequent rows
+---continue in the same table. ANSI widths use the then-current geometry.
+---Row-buffered tables emit after the header and first row (or two headerless
+---rows). ANSI refits later rows and the closing border after geometry changes
+---without replaying emitted rows.
 ---`flush` does not force an unfinished table to emit. Writer calls are
 ---synchronous; `reset`
 ---and `set_sink` may invoke the old writer for ANSI terminal cleanup.
@@ -165,9 +167,13 @@ end
 ---Interactively page a named regular file on the controlling terminal.
 ---Auto enables ANSI styling here; off affects Markdown rendering only, since
 ---pager navigation still requires terminal controls. write_trace is rejected.
+---Text format hard-wraps literal text/log files and supports the same search.
+---`should_cancel()` returning true restores the terminal and returns
+---`false, "cancelled"`; callback exceptions are rethrown after cleanup.
 ---@param path string
----@param opts? libmdf.Options|{format?: "markdown"|"text"|"text/markdown"}
----@return boolean
+---@param opts? libmdf.Options|{format?: "markdown"|"text"|"text/markdown", should_cancel?: fun(): boolean}
+---@return boolean completed
+---@return string? reason
 function mdf.pager(path, opts)
   return core.pager(path, opts or {})
 end

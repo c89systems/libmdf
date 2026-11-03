@@ -997,6 +997,8 @@ int main(void)
 
     fails += expect(strcmp(mdf_status_string(MDF_ERROR_INVALID), "invalid argument") == 0,
                     "status string exposes invalid argument");
+    fails += expect(strcmp(mdf_status_string(MDF_CANCELLED), "cancelled") == 0,
+                    "status string exposes cooperative cancellation");
     fails += expect(strcmp(mdf_status_string((mdf_status)99), "unknown status") == 0,
                     "status string exposes unknown fallback");
     fails += expect(mdf_theme_count() > 0, "theme count is non-zero");
@@ -6555,9 +6557,10 @@ int main(void)
                 for (row = 0; st == MDF_OK && row <= 1024; row++) {
                     st = mdf_feed(inst, "| one | two |\n", strlen("| one | two |\n"), &sink);
                 }
-                fails += expect(st == MDF_ERROR_PARSE &&
-                                strstr(inst->error(inst), "retention limit") != NULL,
-                                "incremental oversized unfinished table fails at the retention limit");
+                fails += expect(st == MDF_OK,
+                                "incremental oversized unfinished table switches to row streaming");
+                if (st == MDF_OK) st = mdf_finish_document(inst, &sink);
+                fails += expect(st == MDF_OK, "adaptive table closes successfully after the row limit");
                 inst->destroy(inst);
                 inst = NULL;
             }

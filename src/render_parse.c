@@ -274,7 +274,7 @@ static int chart_append(mdf_parser_impl *impl, const char *src, size_t len)
         return 0;
     }
     if (impl->incremental_limits &&
-        len > MDF_MAX_INCREMENTAL_CONSTRUCT_BYTES - impl->chart_len) {
+        len > MDF_MAX_RETAINED_CONSTRUCT_BYTES - impl->chart_len) {
         impl->retention_limit_exceeded = 1;
         return -1;
     }
@@ -410,24 +410,22 @@ typedef struct table_filter {
     size_t quote_content_indent;
     int quote_prefix;
     int has_header;
-    int row_layout_ready;
+    int row_streaming;
     size_t row_widths[TABLE_MAX_COLUMNS];
     /* Row-only column metrics: natural, preferred, then glyph minima. */
     size_t *row_natural_widths;
     size_t row_natural_widths_cap;
     int row_available_width;
     size_t retained_bytes;
-    int incremental_limits;
     int retention_limit_exceeded;
 } table_filter;
 
 #define TABLE_FILTER_STATE_PREFIX_PRELUDE 4
 
-static void table_filter_init(table_filter *tf, mdf_allocator *allocator, int incremental_limits)
+static void table_filter_init(table_filter *tf, mdf_allocator *allocator)
 {
     memset(tf, 0, sizeof(*tf));
     tf->allocator = allocator;
-    tf->incremental_limits = incremental_limits;
     tf->line_start = 1;
 }
 
@@ -440,6 +438,17 @@ static void table_filter_clear_rows(table_filter *tf)
         mdf_free_mem(tf->allocator, tf->rows[i], tf->row_lens[i] + 1);
     }
     tf->rows_len = 0;
+}
+
+static void table_filter_clear_header(table_filter *tf)
+{
+    mdf_free_mem(tf->allocator, tf->header, tf->header_len + 1);
+    mdf_free_mem(tf->allocator, tf->delimiter, tf->delimiter_len + 1);
+    tf->retained_bytes -= tf->header_len + tf->delimiter_len;
+    tf->header = NULL;
+    tf->header_len = 0;
+    tf->delimiter = NULL;
+    tf->delimiter_len = 0;
 }
 
 static void table_filter_destroy(table_filter *tf)
@@ -486,7 +495,7 @@ static int table_filter_append_mem(table_filter *tf, char **buf, size_t *len, si
 
 static int table_filter_append_line(table_filter *tf, const char *src, size_t n)
 {
-    if (tf->incremental_limits && n > MDF_MAX_INCREMENTAL_CONSTRUCT_BYTES - tf->retained_bytes) {
+    if (n > MDF_MAX_RETAINED_CONSTRUCT_BYTES - tf->retained_bytes) {
         tf->retention_limit_exceeded = 1;
         return -1;
     }
@@ -516,8 +525,7 @@ static int table_filter_note_chunk_offset(table_filter *tf)
     if (tf->line_chunk_len > 0 && tf->line_chunk_offsets[tf->line_chunk_len - 1] == tf->line_len) {
         return 0;
     }
-    if (tf->incremental_limits &&
-        sizeof(tf->line_chunk_offsets[0]) > MDF_MAX_INCREMENTAL_CONSTRUCT_BYTES - tf->retained_bytes) {
+    if (sizeof(tf->line_chunk_offsets[0]) > MDF_MAX_RETAINED_CONSTRUCT_BYTES - tf->retained_bytes) {
         tf->retention_limit_exceeded = 1;
         return -1;
     }
@@ -639,8 +647,7 @@ static int table_filter_set_copy(table_filter *tf, char **dst, size_t *dst_len, 
 {
     char *copy;
 
-    if (tf->incremental_limits &&
-        n > MDF_MAX_INCREMENTAL_CONSTRUCT_BYTES - (tf->retained_bytes - *dst_len)) {
+    if (n > MDF_MAX_RETAINED_CONSTRUCT_BYTES - (tf->retained_bytes - *dst_len)) {
         tf->retention_limit_exceeded = 1;
         return -1;
     }
@@ -665,11 +672,11 @@ static int table_filter_add_row(table_filter *tf, const char *src, size_t n)
     char *copy;
     size_t new_cap;
 
-    if (tf->incremental_limits && n > MDF_MAX_INCREMENTAL_CONSTRUCT_BYTES - tf->retained_bytes) {
+    if (n > MDF_MAX_RETAINED_CONSTRUCT_BYTES - tf->retained_bytes) {
         tf->retention_limit_exceeded = 1;
         return -1;
     }
-    if (tf->incremental_limits && tf->rows_len == TABLE_MAX_RETAINED_ROWS) {
+    if (tf->rows_len == TABLE_MAX_RETAINED_ROWS) {
         tf->retention_limit_exceeded = 1;
         return -1;
     }
@@ -3660,7 +3667,8 @@ static mdf_status table_render_ansi_row_open(table_filter *tf, mdf_renderer *ren
         if (table_render_row(renderer, sink, tf->rows[i], tf->row_lens[i], tf->row_widths, tf->align, tf->cols, 0, 0, tf->indent_prefix, tf->quote_content_indent, tf->quote_prefix) != 0) return MDF_ERROR_IO;
     }
     table_filter_clear_rows(tf);
-    tf->row_layout_ready = 1;
+    table_filter_clear_header(tf);
+    tf->row_streaming = 1;
     return MDF_OK;
 }
 
@@ -3706,7 +3714,7 @@ static mdf_status table_render_ansi_row_finish(table_filter *tf, mdf_renderer *r
     mdf_impl *impl;
 
     impl = (mdf_impl *)renderer->impl;
-    if (!tf->row_layout_ready) {
+    if (!tf->row_streaming) {
         return table_render_ansi(tf, renderer, sink);
     }
     table_reflow_ansi_row_geometry(tf, renderer);
@@ -3830,7 +3838,7 @@ static int table_render_html_row(table_filter *tf, mdf_renderer *renderer, mdf_s
                                    header,
                                    !tf->has_header &&
                                    !tf->truncated_columns &&
-                                   impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW &&
+                                   (tf->row_streaming || impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW) &&
                                    i + 1 == tf->cols,
                                    tf->quote_prefix,
                                    sink) != 0) return -1;
@@ -3840,7 +3848,7 @@ static int table_render_html_row(table_filter *tf, mdf_renderer *renderer, mdf_s
     return 0;
 }
 
-static mdf_status table_render_html(table_filter *tf, mdf_parser_impl *parser_impl, mdf_renderer *renderer, mdf_sink *sink, int followed_by_content)
+static mdf_status table_render_html_row_open(table_filter *tf, mdf_renderer *renderer, mdf_sink *sink)
 {
     mdf_impl *impl;
     html_state *state;
@@ -3930,6 +3938,18 @@ static mdf_status table_render_html(table_filter *tf, mdf_parser_impl *parser_im
     for (i = 0; i < tf->rows_len; i++) {
         if (table_render_html_row(tf, renderer, sink, tf->rows[i], tf->row_lens[i], 0) != 0) return MDF_ERROR_IO;
     }
+    table_filter_clear_rows(tf);
+    table_filter_clear_header(tf);
+    tf->row_streaming = 1;
+    return MDF_OK;
+}
+
+static mdf_status table_render_html_row_finish(table_filter *tf, mdf_parser_impl *parser_impl,
+                                              mdf_renderer *renderer, mdf_sink *sink, int followed_by_content)
+{
+    mdf_impl *impl;
+
+    impl = (mdf_impl *)renderer->impl;
     if (mdf_write_cstr(sink, "</tbody>") != 0) return MDF_ERROR_IO;
     if (tf->quote_prefix || tf->indent_prefix > 0) {
         if (mdf_write_cstr(sink, "</table>\n") != 0) return MDF_ERROR_IO;
@@ -3987,6 +4007,44 @@ static mdf_status table_filter_flush_before_render(table_filter *tf, parse_state
     return MDF_OK;
 }
 
+static mdf_status table_filter_start_rows(table_filter *tf, parse_state *ps, mdf_parser_impl *parser_impl,
+                                         mdf_renderer *renderer, mdf_sink *sink)
+{
+    mdf_impl *impl;
+    mdf_status st;
+
+    impl = (mdf_impl *)renderer->impl;
+    st = table_filter_flush_before_render(tf, ps, parser_impl, renderer, sink);
+    if (st != MDF_OK) return st;
+    if (impl->format == MDF_FORMAT_ANSI) {
+        return table_render_ansi_row_open(tf, renderer, sink);
+    }
+    return table_render_html_row_open(tf, renderer, sink);
+}
+
+/* Commit only completed rows. The current input line stays untouched so it can
+ * finish through the same open table, without replaying any emitted bytes. */
+static mdf_status table_filter_prepare_retention(table_filter *tf, parse_state *ps, mdf_parser_impl *parser_impl,
+                                                mdf_renderer *renderer, mdf_sink *sink, size_t extra, int adding_row)
+{
+    mdf_status st;
+
+    if (adding_row && tf->row_streaming) return MDF_OK;
+    if (tf->state == 3 && !tf->row_streaming &&
+        (extra > MDF_MAX_RETAINED_CONSTRUCT_BYTES - tf->retained_bytes ||
+         (adding_row && tf->rows_len == TABLE_MAX_RETAINED_ROWS))) {
+        st = table_filter_start_rows(tf, ps, parser_impl, renderer, sink);
+        if (st != MDF_OK) return st;
+        /* The completed current row is now emitted directly, without a copy. */
+        if (adding_row) return MDF_OK;
+    }
+    if (extra > MDF_MAX_RETAINED_CONSTRUCT_BYTES - tf->retained_bytes) {
+        tf->retention_limit_exceeded = 1;
+        return MDF_ERROR_NOMEM;
+    }
+    return MDF_OK;
+}
+
 static mdf_status table_filter_render(table_filter *tf, parse_state *ps, mdf_parser_impl *parser_impl, mdf_renderer *renderer, mdf_sink *sink, int followed_by_content)
 {
     mdf_impl *impl;
@@ -4001,7 +4059,7 @@ static mdf_status table_filter_render(table_filter *tf, parse_state *ps, mdf_par
             parser_impl->prev_quote_line_text = 0;
             parser_impl->pending_quoted_list_blank_depth = 0;
         }
-        if (impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW) {
+        if (tf->row_streaming || impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW) {
             st = table_render_ansi_row_finish(tf, renderer, sink);
         } else {
             st = table_render_ansi(tf, renderer, sink);
@@ -4012,20 +4070,18 @@ static mdf_status table_filter_render(table_filter *tf, parse_state *ps, mdf_par
         return st;
     }
     if (impl->format == MDF_FORMAT_HTML) {
-        return table_render_html(tf, parser_impl, renderer, sink, followed_by_content);
+        if (!tf->row_streaming) {
+            st = table_render_html_row_open(tf, renderer, sink);
+            if (st != MDF_OK) return st;
+        }
+        return table_render_html_row_finish(tf, parser_impl, renderer, sink, followed_by_content);
     }
     return MDF_ERROR_PARSE;
 }
 
 static void table_filter_reset_candidate(table_filter *tf)
 {
-    mdf_free_mem(tf->allocator, tf->header, tf->header_len + 1);
-    mdf_free_mem(tf->allocator, tf->delimiter, tf->delimiter_len + 1);
-    tf->retained_bytes -= tf->header_len + tf->delimiter_len;
-    tf->header = NULL;
-    tf->header_len = 0;
-    tf->delimiter = NULL;
-    tf->delimiter_len = 0;
+    table_filter_clear_header(tf);
     table_filter_clear_rows(tf);
     tf->cols = 0;
     tf->truncated_columns = 0;
@@ -4033,7 +4089,7 @@ static void table_filter_reset_candidate(table_filter *tf)
     tf->quote_content_indent = 0;
     tf->quote_prefix = 0;
     tf->has_header = 0;
-    tf->row_layout_ready = 0;
+    tf->row_streaming = 0;
     memset(tf->row_widths, 0, sizeof(tf->row_widths));
     tf->state = 0;
     table_filter_reset_line(tf);
@@ -4373,11 +4429,8 @@ static mdf_status table_filter_complete_line(table_filter *tf, parse_state *ps, 
             if (table_filter_add_row(tf, tf->header, tf->header_len) != 0) return MDF_ERROR_NOMEM;
             if (table_filter_add_row(tf, content, content_len) != 0) return MDF_ERROR_NOMEM;
             tf->state = 3;
-            if (render_impl->format == MDF_FORMAT_ANSI &&
-                render_impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW) {
-                st = table_filter_flush_before_render(tf, ps, impl, renderer, sink);
-                if (st != MDF_OK) return st;
-                st = table_render_ansi_row_open(tf, renderer, sink);
+            if (render_impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW) {
+                st = table_filter_start_rows(tf, ps, impl, renderer, sink);
                 if (st != MDF_OK) return st;
             }
             table_filter_reset_line(tf);
@@ -4400,7 +4453,10 @@ static mdf_status table_filter_complete_line(table_filter *tf, parse_state *ps, 
             content_len = tf->line_len;
         }
         if (table_count_cells(content, content_len) > 0) {
+            st = table_filter_prepare_retention(tf, ps, impl, renderer, sink, content_len, 1);
+            if (st != MDF_OK) return st;
             if (!tf->has_header &&
+                !tf->row_streaming &&
                 render_impl->opts.table_buffer_mode != MDF_TABLE_BUFFER_ROW) {
                 size_t row_cols;
                 size_t j;
@@ -4419,19 +4475,19 @@ static mdf_status table_filter_complete_line(table_filter *tf, parse_state *ps, 
                     tf->truncated_columns = 1;
                 }
             }
-            if (render_impl->format == MDF_FORMAT_ANSI &&
-                render_impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW &&
-                tf->row_layout_ready) {
-                st = table_render_ansi_row_continue(tf, renderer, sink, content, content_len);
-                if (st != MDF_OK) return st;
+            if (tf->row_streaming) {
+                if (render_impl->format == MDF_FORMAT_ANSI) {
+                    st = table_render_ansi_row_continue(tf, renderer, sink, content, content_len);
+                    if (st != MDF_OK) return st;
+                } else if (table_render_html_row(tf, renderer, sink, content, content_len, 0) != 0) {
+                    return MDF_ERROR_IO;
+                }
             } else {
                 if (table_filter_add_row(tf, content, content_len) != 0) return MDF_ERROR_NOMEM;
-                if (render_impl->format == MDF_FORMAT_ANSI &&
-                    render_impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW &&
-                    tf->rows_len >= (tf->has_header ? 1u : 2u)) {
-                    st = table_filter_flush_before_render(tf, ps, impl, renderer, sink);
-                    if (st != MDF_OK) return st;
-                    st = table_render_ansi_row_open(tf, renderer, sink);
+                if (tf->rows_len == TABLE_MAX_RETAINED_ROWS ||
+                    (render_impl->opts.table_buffer_mode == MDF_TABLE_BUFFER_ROW &&
+                     tf->rows_len >= (tf->has_header ? 1u : 2u))) {
+                    st = table_filter_start_rows(tf, ps, impl, renderer, sink);
                     if (st != MDF_OK) return st;
                 }
             }
@@ -4463,8 +4519,13 @@ static mdf_status table_filter_feed(table_filter *tf, parse_state *ps, mdf_parse
     for (i = 0; i < n; i++) {
         ch = buf[i];
         if (tf->state != 0) {
-            if (i == 0 && table_filter_note_chunk_offset(tf) != 0) {
-                return MDF_ERROR_NOMEM;
+            /* Only UTF-8 boundaries are inspected by the Go parity filter. */
+            if (i == 0 && tf->line_len > 0 &&
+                ((unsigned char)ch >= 0x80 || (unsigned char)tf->line[tf->line_len - 1] >= 0x80)) {
+                st = table_filter_prepare_retention(tf, ps, impl, renderer, sink,
+                                                    sizeof(tf->line_chunk_offsets[0]), 0);
+                if (st != MDF_OK) return st;
+                if (table_filter_note_chunk_offset(tf) != 0) return MDF_ERROR_NOMEM;
             }
             if (tf->state == TABLE_FILTER_STATE_PREFIX_PRELUDE) {
                 if (ch == '\n') {
@@ -4495,9 +4556,12 @@ static mdf_status table_filter_feed(table_filter *tf, parse_state *ps, mdf_parse
             if (ch == '\n') {
                 st = table_filter_complete_line(tf, ps, impl, renderer, sink);
                 if (st != MDF_OK) return st;
-            } else if (table_filter_append_line(tf, &ch, 1) != 0) {
-                return MDF_ERROR_NOMEM;
-            } else if (tf->state == 1 && table_list_direct_ready(tf->line, tf->line_len)) {
+                continue;
+            }
+            st = table_filter_prepare_retention(tf, ps, impl, renderer, sink, 1, 0);
+            if (st != MDF_OK) return st;
+            if (table_filter_append_line(tf, &ch, 1) != 0) return MDF_ERROR_NOMEM;
+            if (tf->state == 1 && table_list_direct_ready(tf->line, tf->line_len)) {
                 st = table_filter_replay_line(ps, impl, renderer, sink, tf->line, tf->line_len, 0);
                 if (st != MDF_OK) return st;
                 tf->state = 0;
@@ -6280,7 +6344,7 @@ static parser_stream_state *parser_stream_state_get(mdf_parser *self, int create
     }
     memset(state, 0, sizeof(*state));
     state->frontmatter.allocator = &impl->allocator;
-    table_filter_init(&state->tables, &impl->allocator, impl->incremental_limits);
+    table_filter_init(&state->tables, &impl->allocator);
     state->parse.at_line_start = 1;
     state->parse.thematic_possible = 1;
     impl->stream_state = state;
@@ -6382,7 +6446,7 @@ static mdf_status mdf_parser_feed_unfiltered(mdf_parser *self,
 done:
     if (st == MDF_ERROR_NOMEM &&
         (impl->retention_limit_exceeded || state->tables.retention_limit_exceeded)) {
-        mdf_parser_set_error(self, "pending construct exceeds the 65536-byte or 1024-row retention limit");
+        mdf_parser_set_error(self, "pending row or construct exceeds the 65536-byte retention limit");
         return MDF_ERROR_PARSE;
     }
     return st;
@@ -6472,7 +6536,7 @@ mdf_status mdf_parser_finish_document(mdf_parser *self, mdf_renderer *renderer, 
             if (st != MDF_OK) {
                 if (st == MDF_ERROR_NOMEM &&
                     (impl->retention_limit_exceeded || state->tables.retention_limit_exceeded)) {
-                    mdf_parser_set_error(self, "pending construct exceeds the 65536-byte or 1024-row retention limit");
+                    mdf_parser_set_error(self, "pending row or construct exceeds the 65536-byte retention limit");
                     return MDF_ERROR_PARSE;
                 }
                 return st;
@@ -6483,7 +6547,7 @@ mdf_status mdf_parser_finish_document(mdf_parser *self, mdf_renderer *renderer, 
     if (st != MDF_OK) {
         if (st == MDF_ERROR_NOMEM &&
             (impl->retention_limit_exceeded || state->tables.retention_limit_exceeded)) {
-            mdf_parser_set_error(self, "pending construct exceeds the 65536-byte or 1024-row retention limit");
+            mdf_parser_set_error(self, "pending row or construct exceeds the 65536-byte retention limit");
             return MDF_ERROR_PARSE;
         }
         return st;
@@ -6493,7 +6557,7 @@ mdf_status mdf_parser_finish_document(mdf_parser *self, mdf_renderer *renderer, 
         if (st != MDF_OK) {
             if (st == MDF_ERROR_NOMEM &&
                 (impl->retention_limit_exceeded || state->tables.retention_limit_exceeded)) {
-                mdf_parser_set_error(self, "pending construct exceeds the 65536-byte or 1024-row retention limit");
+                mdf_parser_set_error(self, "pending row or construct exceeds the 65536-byte retention limit");
                 return MDF_ERROR_PARSE;
             }
             return st;

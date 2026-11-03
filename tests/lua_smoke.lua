@@ -96,6 +96,12 @@ end
 
 local cmdf = assert(os.getenv("LIBMDF_CMDF"), "LIBMDF_CMDF")
 local cmdf_lua = assert(os.getenv("LIBMDF_CMDF_LUA"), "LIBMDF_CMDF_LUA")
+for _, cli in ipairs({ cmdf, cmdf_lua }) do
+  assert(run_command_expect_fail(shell_quote(cli) .. " --pager-format text"):find(
+    "--pager-format requires --pager", 1, true))
+  assert(run_command_expect_fail(shell_quote(cli) .. " --pager --pager-format invalid"):find(
+    "invalid pager format", 1, true))
+end
 local sample = "# Lua\n\nbody with **strong** and [link](https://example.com)\n"
 local parity_opts = { ansi_mode = "on", boring = true, osc8 = mdf.detect_osc8_support() }
 
@@ -1700,6 +1706,40 @@ do
   assert_equal(run_capture(shell_quote(cmdf), text), plain, "native CLI defaults to plain output")
   assert_equal(run_capture(shell_quote(cmdf_lua), text), plain, "Lua CLI defaults to plain output")
   assert_equal(run_capture(shell_quote(cmdf_lua) .. " --ascii --osc8 on", text), plain, "Lua CLI ASCII overrides OSC8")
+end
+
+-- Full tables fall back without closing/reopening; explicit rows start early.
+for _, format in ipairs({ "ansi", "html" }) do
+  for _, row_mode in ipairs({ false, true }) do
+    local writes = {}
+    local opts = {
+      format = format, ansi_mode = "off", html_title = "Tables",
+    }
+    if format == "html" then opts.disable_embedded_font = true end
+    if row_mode then opts.table_buffer_mode = "row" end
+    local stream = mdf.document_stream(opts, function(chunk)
+      writes[#writes + 1] = chunk
+    end)
+    assert(stream:write("| HeadUnique |\n|---|\n| EarlyCell |\n"))
+    local early = table.concat(writes):find("EarlyCell", 1, true) ~= nil
+    assert(early == row_mode, "table policy controls early emission for " .. format)
+    for row = 1, 1100 do assert(stream:write("| Row" .. row .. " |\n")) end
+    local before_eof = table.concat(writes)
+    assert(before_eof:find("Row1100", 1, true), "large table emits before EOF for " .. format)
+    if format == "html" then
+      assert(before_eof:find("<table ", 1, true) and not before_eof:find("</table>", 1, true))
+    end
+    assert(stream:finish_document())
+    local output = table.concat(writes)
+    local _, headers = output:gsub("HeadUnique", "")
+    assert(headers == 1, "adaptive table header is emitted once")
+    if format == "html" then
+      local _, opens = output:gsub("<table ", "")
+      local _, closes = output:gsub("</table>", "")
+      assert(opens == 1 and closes == 1, "one continuous HTML table")
+    end
+    stream:close()
+  end
 end
 
 -- C89 branding is the same library option exposed by the C CLI.

@@ -27,7 +27,9 @@ typedef enum mdf_status {
     /** A source, sink, or filesystem operation failed. */
     MDF_ERROR_IO = 3,
     /** Markdown input could not be parsed. */
-    MDF_ERROR_PARSE = 4
+    MDF_ERROR_PARSE = 4,
+    /** Pager cancellation was requested; terminal state has been restored. */
+    MDF_CANCELLED = 5
 } mdf_status;
 
 /** Select how the pager interprets its named input. */
@@ -39,6 +41,21 @@ typedef enum mdf_pager_format {
     /** Render the file through the ANSI Markdown renderer. */
     MDF_PAGER_FORMAT_MARKDOWN = 2
 } mdf_pager_format;
+
+/** Optional per-call cooperative pager cancellation. NULL disables it. */
+typedef struct mdf_pager_control {
+    /** Borrowed context, valid until the pager returns. */
+    void *userdata;
+    /**
+     * Return nonzero to cancel. Called synchronously on the pager's calling
+     * thread during loading, rendering, search and navigation, never from a
+     * signal handler. A NULL callback disables cancellation. Keep it short;
+     * synchronize caller-owned state when requesting cancellation from another
+     * thread. Do not invoke another pager from this callback. A blocking source
+     * callback or terminal write cannot be preempted.
+     */
+    int (*should_cancel)(void *userdata);
+} mdf_pager_control;
 
 /**
  * Output renderer selection.
@@ -83,9 +100,9 @@ typedef enum mdf_deck_transition {
     MDF_DECK_TRANSITION_HARD = 2
 } mdf_deck_transition;
 
-/** ANSI table buffering policy; HTML tables always retain the full table. */
+/** Table buffering policy for ANSI and HTML output. */
 typedef enum mdf_table_buffer_mode {
-    /** Default: accept incremental feeds, but render the table only at its end. */
+    /** Default: buffer until table end or 64 KiB/1024 retained rows, then stream. */
     MDF_TABLE_BUFFER_FULL = 0,
     /** Emit header/first row (or two headerless rows), then later rows. */
     MDF_TABLE_BUFFER_ROW = 1
@@ -316,7 +333,7 @@ typedef struct mdf_options {
     int slide_numbers;
     /** Center-align paragraph text on the first deck slide. */
     int deck_center_front_text;
-    /** ANSI table buffering mode; HTML tables and chart fences ignore it. */
+    /** ANSI/HTML table buffering mode; chart fences ignore it. */
     mdf_table_buffer_mode table_buffer_mode;
     /** ANSI table border style; does not affect chart fence drawing. */
     mdf_table_wire_mode table_wire_mode;
@@ -547,6 +564,12 @@ struct mdf {
     void *impl;
     /** Get the configured theme's full foreground palette; see mdf_get_theme_palette. */
     mdf_status (*get_theme_palette)(const mdf *self, mdf_theme_palette *out);
+    /** Page a file using this ANSI receiver's options; see mdf_pager_file. */
+    mdf_status (*pager_file)(mdf *self, const char *path, mdf_pager_format format,
+                             const mdf_pager_control *control);
+    /** Page a finite source using this ANSI receiver's options; see mdf_pager_source. */
+    mdf_status (*pager_source)(mdf *self, const char *name, mdf_source *source,
+                               mdf_pager_format format, const mdf_pager_control *control);
 };
 
 /**
@@ -610,8 +633,8 @@ mdf_status mdf_set_width(mdf *renderer, int width);
  * already emitted on the current line, are not rewritten. A new left margin
  * is not inserted after committed text on that line; it begins on the next
  * line. Retained inline code and link decisions are recomputed before emission.
- * A full-buffer ANSI table uses the geometry current at its terminating line
- * or EOF, even after earlier feeds retained rows. In row-buffered ANSI mode,
+ * A full-buffer ANSI table uses the geometry current at its terminating line,
+ * EOF or retention limit, even after earlier feeds retained rows. Once streaming,
  * later rows and the closing border refit the new geometry while emitted rows
  * stay unchanged.
  * No sink write occurs during this call. It may run between feeds or from a
@@ -656,12 +679,14 @@ mdf_status mdf_render(mdf *renderer, mdf_source *source, mdf_sink *sink);
  * Rendering is synchronous: sink is borrowed only for this call, does not
  * replace any receiver binding, and each decided emission must be accepted
  * completely. Feed consumes the supplied fragment without waiting for future
- * fragments, but a full-buffer table emits no table bytes until its end.
+ * fragments. Full-buffer tables emit at their end or switch to row streaming
+ * at 65536 retained bytes or 1024 rows, preserving one continuous table.
  * This is not EOF; call mdf_finish_document to resolve an unterminated
  * construct and close output.
- * A pending table or chart construct is limited to 65536 retained bytes;
- * tables are also limited to 1024 retained rows. Exceeding either limit fails
- * with MDF_ERROR_PARSE rather than buffering an unbounded document suffix.
+ * A pending row, undecided table prefix, or incremental chart that cannot fit
+ * within 65536 retained bytes fails with MDF_ERROR_PARSE. Table retention
+ * bounds also apply to source-callback rendering. These are retained-data
+ * limits, not a cap on all renderer allocations.
  * Feed, flush, and finish_document reject HTML deck renderers; HTML requires
  * an explicit title set before the first call. A sink failure latches this
  * document in a failed state without retrying output. After a successful
@@ -803,10 +828,22 @@ int mdf_terminal_width(int fd, int fallback);
  * MDF_ANSI_AUTO enables styling here because the pager is interactive, even
  * though its internal rendering sink is a callback. MDF_ANSI_OFF suppresses
  * escapes in rendered Markdown; pager navigation still uses terminal controls.
+ * TEXT selects literal text/log viewing with hard wrapping at terminal display
+ * columns, independent of filename; Markdown syntax is not interpreted.
+ * Optional control requests cancellation without raising a process signal.
+ * Cancellation restores terminal modes, cursor, alternate screen and signal
+ * handlers before returning MDF_CANCELLED. Idle waits are capped at 50 ms.
+ * NULL control preserves key and signal behavior. Only one pager may use the
+ * process terminal/signal state at a time. Emission storage marked
+ * take_ownership transfers when input loading begins and is released on every
+ * later return, including cancellation or loading failure.
+ * Receiver pager methods require an idle ANSI receiver, use independent pager
+ * workspace with its allocator and emission limit, and preserve the bound sink.
  */
 mdf_status mdf_pager_file(const char *path,
                           const mdf_options *render_options,
-                          mdf_pager_format format);
+                          mdf_pager_format format,
+                          const mdf_pager_control *control);
 /**
  * Read all bytes from source through EOF, then interactively page the named
  * buffered input on the controlling terminal. The source read callback's
@@ -819,7 +856,8 @@ mdf_status mdf_pager_file(const char *path,
 mdf_status mdf_pager_source(const char *name,
                             mdf_source *source,
                             const mdf_options *render_options,
-                            mdf_pager_format format);
+                            mdf_pager_format format,
+                            const mdf_pager_control *control);
 
 #ifdef __cplusplus
 }

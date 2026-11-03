@@ -60,6 +60,10 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cmdf.sh"
 add_custom_target(lua-cli ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/cmdf.lua" "${CMAKE_CURRENT_BINARY_DIR}/cmdf.sh")
 enable_testing()
 add_test(NAME lua_smoke COMMAND lua "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua_smoke.lua")
+add_test(NAME lua_pager COMMAND test_pager "${CMAKE_CURRENT_BINARY_DIR}/cmdf.sh"
+  "$<TARGET_FILE:lua>" "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua_pager.lua")
+set_tests_properties(lua_pager PROPERTIES LABELS "integration;lua;pager;forkpty" TIMEOUT 30
+  ENVIRONMENT "LUA_PATH=${tree}/share/lua/5.5/?.lua\;\;;LUA_CPATH=${tree}/lib/lua/5.5/?.so\;\;")
 add_test(NAME lua_destination_policy COMMAND test_destination_policy "$<TARGET_FILE:lua>"
   "${CMAKE_CURRENT_BINARY_DIR}/fixtures" "${CMAKE_CURRENT_SOURCE_DIR}/tests/lua_destination_policy.lua")
 add_test(NAME lua_cli_destination_policy COMMAND test_destination_policy "${CMAKE_CURRENT_BINARY_DIR}/cmdf.sh"

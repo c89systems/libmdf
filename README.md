@@ -280,8 +280,8 @@ Important options:
 - `deck_center_front_text`: center-align paragraph text on the first deck
   slide.
 - `table_buffer_mode`: `MDF_TABLE_BUFFER_FULL` (default) or
-  `MDF_TABLE_BUFFER_ROW` for ANSI tables. HTML tables use browser layout and
-  retain the complete table regardless of this option.
+  `MDF_TABLE_BUFFER_ROW` for ANSI and HTML tables. Full mode automatically
+  switches the current table to row streaming at 64 KiB or 1024 retained rows.
 - `table_wire_mode`: `MDF_TABLE_WIRE_LINE`, `MDF_TABLE_WIRE_ASCII`, or
   `MDF_TABLE_WIRE_SPACE`.
 - `write_trace`: callback for ANSI decision-emission tracing.
@@ -347,8 +347,9 @@ must remain at least three columns. Setting unchanged geometry preserves
 pending decisions. The new geometry also applies to later documents. If
 pending-decision reflow runs out of memory, the previous geometry remains
 configured, but callers must reset and replay the failed document. A
-full-buffer ANSI table uses the geometry in effect when its terminating line
-or EOF makes it render, even if the geometry changed while rows were retained.
+full-buffer ANSI table uses the geometry in effect when its terminating line,
+EOF or retention limit makes it render, even if geometry changed while rows
+were retained.
 In row-buffered ANSI mode, the header and first body row (or the first two
 headerless rows) emit once their layout can be decided; already-emitted rows
 remain unchanged, while subsequent rows and the closing border refit the
@@ -365,16 +366,23 @@ sink. libmdf never retains input for replay. If terminal cleanup on the old
 sink fails during replacement, the renderer still discards state and binds the
 new sink; replay remains the caller's responsibility.
 
-In incremental mode, pending table and chart constructs retain at most 65536
-bytes, and tables retain at most 1024 rows; an oversized unfinished construct
-fails with `MDF_ERROR_PARSE` instead of growing without bound. The incremental
-lifecycle supports ANSI and HTML documents; HTML callers must set an explicit
-title before the first feed because automatic title detection is a one-shot
-source feature.
+ANSI and HTML tables retain at most 65536 bytes or 1024 rows before switching
+from full buffering to row streaming. Column widths for ANSI are calculated
+from the completed buffered rows at that point; subsequent rows use those
+widths. The current row continues through the same table, with no repeated
+header or inserted border. HTML retains its browser-managed column layout.
+The limits apply to both source-callback and incremental rendering and are
+currently fixed, with no public configuration option. A single pending row or
+undecided table prefix that cannot fit still fails with `MDF_ERROR_PARSE`.
+Incremental charts retain their 65536-byte limit and fail if it is exceeded.
+These limits count retained decision data, not total allocated memory.
+The incremental lifecycle supports ANSI and HTML documents; HTML callers must
+set an explicit title before the first feed because automatic title detection
+is a one-shot source feature.
 HTML deck renderers remain whole-source only.
 
-The shared library uses SONAME ABI version `6`, advanced from released ABI 5
-because the C89 HTML branding option changes the public options layout.
+The shared library uses SONAME ABI version `7`, advanced from released ABI 6
+because the pager entry points now accept a cancellation-control argument.
 Lua facade and `cmdf.lua` changes do not themselves require a C ABI bump.
 
 For HTML, `mdf_set_html_title(renderer, title)` can set an optional document
@@ -512,12 +520,14 @@ one parser/renderer decision buffer -> one emission -> one sink write
 
 When `write_trace` is configured for ANSI output, trace events describe the
 exact sink writes in the same order. Tables are the exception to ordinary
-word-sized streaming: `MDF_TABLE_BUFFER_FULL` buffers the full table before
-rendering, while `MDF_TABLE_BUFFER_ROW` emits the header and first body row
+word-sized streaming: `MDF_TABLE_BUFFER_FULL` buffers up to the table's end
+or its retention limit, then emits the retained rows once. At the limit it
+continues directly through the row renderer without restarting the table.
+`MDF_TABLE_BUFFER_ROW` emits the header and first body row
 (or first two headerless rows), then later rows as the parser can decide them.
 Both modes accept successive incremental fragments: `feed` consumes the
-supplied fragment and returns without waiting for future fragments, but full
-mode emits no table bytes until the table ends.
+supplied fragment and returns without waiting for future fragments. Small
+full-buffer tables emit when they end. Both modes work for ANSI and HTML.
 
 `flush` cannot force an unfinished table to render. Sink writes remain
 synchronous, so neither mode promises nonblocking I/O.
@@ -594,6 +604,8 @@ cmdf README.md -o README.txt
 cmdf -b -w 80 --margin-left 2 --margin-right 2 README.md
 cmdf --pager README.md
 cmdf --pager --incremental README.md
+cmdf --pager --pager-format text application.log
+cmdf --pager --pager-format text README.md
 cmdf --html --incremental --title "Document title" README.md
 cmdf -p /var/log/messages
 ```
@@ -669,6 +681,40 @@ leaves search mode without leaving the pager. Markdown views rerender only after
 HTML/deck output, `--output`, write tracing, or input simulation. It can be
 combined with `--incremental`; the pager starts after that document reaches
 EOD and rerenders its named Markdown source after a settled resize.
+
+`--pager-format auto|text|markdown` selects the pager's input interpretation.
+`text` hard-wraps literal text at terminal display columns, preserving Markdown
+punctuation and supporting `/` search and `n`/`N` navigation. Search also matches
+within words split across display wraps. `auto` keeps extension-based selection;
+`markdown` renders Markdown regardless of filename. The pager reads a finite
+snapshot through EOF; it does not follow appended log data.
+
+Embedded C callers can use the ANSI receiver's appended `pager_file` and
+`pager_source` methods, or `mdf_pager_file`/`mdf_pager_source` with render options.
+Every call accepts a final optional `const mdf_pager_control *`; pass `NULL`
+when cancellation is unnecessary. For example, with an application-owned
+callback and context:
+
+```c
+mdf_pager_control control;
+mdf_status status;
+control.userdata = app;
+control.should_cancel = app_wants_pager_closed;
+status = viewer->pager_file(viewer, "application.log", MDF_PAGER_FORMAT_TEXT, &control);
+if (status == MDF_CANCELLED) {
+    /* The pager restored the terminal; continue the application. */
+}
+```
+
+The callback runs on the calling thread during loading, rendering, search and
+navigation; a nonzero result requests cancellation. Idle waits are capped at
+50 ms. Synchronize application state shared with another thread. A currently
+blocking source callback or terminal write must return before cancellation can
+finish. Cancellation restores terminal and signal state and returns
+`MDF_CANCELLED` without raising a signal. Receiver methods use independent pager
+workspace and leave the receiver usable afterward. These pager signature
+changes advance the shared-library ABI from 6 to 7; C callers must supply the
+new final argument.
 
 `--c89` applies the [C89 Systems Lights Out](https://c89.systems/lights-out/)
 page design: a faint oversized background mark, sticky branded header with
@@ -920,9 +966,10 @@ coroutines remain usable.
 that has not yet been passed to the callback; neither rewrites an emission
 already completed. With `table_buffer_mode = "full"`, an unfinished ANSI table
 uses the geometry in effect when it renders; `write` still accepts fragments
-while it waits for a terminating line or EOF. With `"row"`, later rows and the
-closing border use the new geometry without replaying earlier rows. Use
-`reset()` and resend caller-owned source when the whole document must reflow.
+while it waits for a terminating line, EOF or the retention limit. With `"row"`,
+later rows and the closing border use the new geometry without replaying
+earlier rows. Use `reset()` and resend caller-owned source when the whole
+document must reflow.
 For the manual-token surface, `handle:write_token` accepts a table such as
 `{ type = "text", text = "hello" }` or a numeric `mdf.token.*` type,
 with optional `level`; finish that stream with `handle:finish()`.
@@ -934,6 +981,9 @@ extension-based (`.md` is Markdown; all other files are text); pass
 `{ format = "text/markdown" }` (assumed UTF-8) or
 `{ format = "text/markdown; charset=utf-8" }` to render a non-`.md` file as Markdown, or
 `{ format = "text" }` to suppress Markdown rendering for a `.md` file.
+Supply `should_cancel = function() ... end` to request cooperative cancellation.
+Cancellation returns `false, "cancelled"`; callback exceptions are rethrown
+unchanged after terminal cleanup. Ordinary quit returns `true`.
 
 HTML and deck handles can set or clear the document/deck title before rendering:
 
