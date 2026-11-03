@@ -13,6 +13,25 @@ type failOnRead struct {
 	reads int
 }
 
+func TestTerminalURLFragmentCompatibility(t *testing.T) {
+	opts := defaultParityOptions()
+	for _, input := range []string{
+		"- [x](https://example.com/a/very/long/path?x=1&y=2) next words follow\n",
+		"//localhost/abcdefghijklmnopqrstuvwxyz a b c d e f\n",
+		"//abcdefghijklmnopqrstuv\n",
+		"- //localhost/abcdefghijklmnopqrstuv a b c d e f\n",
+		"**https://example.com/abcdefghijklmnopqrstuvwxyz** a b c d e f\n",
+	} {
+		for _, chunk := range []int{1, 2, 7} {
+			for _, trace := range []bool{false, true} {
+				if err := compareLibmdfOne("ansi", []byte(input), chunk, 12, opts, trace); err != nil {
+					t.Fatalf("input=%q chunk=%d trace=%v: %v", input, chunk, trace, err)
+				}
+			}
+		}
+	}
+}
+
 func TestNormalizeReferenceHTMLFonts(t *testing.T) {
 	face := func(family, payload, weight, style string) string {
 		return `@font-face{font-family:"` + family + `";src:url(data:font/woff2;base64,` + payload +

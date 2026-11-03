@@ -82,8 +82,7 @@
   strong text, combined emphasis,
   inline code, links
   (https://example.com/deck), and
-  autolinks like https://example.com/
-  autolink.
+  autolinks like https://example.com/autolink.
 
   # Lists
 
@@ -320,9 +319,7 @@
 
   A longer link label that wraps across
   lines in narrow viewports
-  (https://example.com/docs/deck/mode/lon
-  g
-  /link)
+  (https://example.com/docs/deck/mode/long/link)
 
   Link activation should not
   accidentally advance the deck. Focus
@@ -332,9 +329,7 @@
   # Image Syntax
 
   !Tiny transparent pixel
-  (data:image/gif;base64,R0lGODlhAQABAAAA
-  A
-  Cw=)
+  (data:image/gif;base64,R0lGODlhAQABAAAAACw=)
 
   This exercises Markdown image output
   without requiring network access. The

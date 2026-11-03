@@ -52,6 +52,7 @@ typedef struct mdf_memory {
 
 typedef struct mdf_ansi_pending_state {
     int col;
+    int soft_wrap_line;
     int writing_left_margin;
     int left_margin;
     int suppress_left_margin;
@@ -153,6 +154,7 @@ typedef struct mdf_impl {
     int pending_list_quote_blank_indent;
     int code_style_open;
     int ansi_col;
+    int ansi_soft_wrap_line;
     int ansi_writing_left_margin;
     int ansi_pending_left_margin;
     int ansi_suppress_left_margin;
@@ -249,6 +251,7 @@ typedef struct mdf_impl {
     size_t ansi_pending_code_cap;
     int ansi_pending_code_valid;
     int ansi_pending_code_col;
+    int ansi_pending_code_soft_wrap_line;
     int ansi_pending_code_writing_left_margin;
     int ansi_pending_code_left_margin;
     int ansi_pending_code_suppress_left_margin;

@@ -135,13 +135,8 @@
   └───┴───┴────────┘
 
   Container link
-  (https://example.co
-  m
-  /container-chart)
-  and bare https://
-  example.com/
-  container-chart/
-  autolink should
-  both remain safe
-  in HTML and deck
-  output.
+  (https://example.com/container-chart)
+  and bare https://example.com/container-chart/autolink
+  should both remain
+  safe in HTML and
+  deck output.

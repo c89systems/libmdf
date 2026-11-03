@@ -26,7 +26,7 @@ unzip -q -d "$work/srcrock" "$srcrock"
 [[ $(find "$work/srcrock" -type f | wc -l) == 2 ]]
 cmp "$rockspec" "$work/srcrock/libmdf-$version-1.rockspec"
 cmp "$archive" "$work/srcrock/libmdf-lua-$version.tar.gz"
-grep -Fq "https://github.com/sa6mwa/libmdf/releases/download/v$version/libmdf-lua-$version.tar.gz" "$rockspec"
+grep -Fq "https://github.com/c89systems/libmdf/releases/download/v$version/libmdf-lua-$version.tar.gz" "$rockspec"
 grep -Fq 'dependencies = { "lua >= 5.5, < 5.6" }' "$rockspec"
 if grep -Fq 'file://' "$rockspec"; then printf 'Lua source acquisition URL must be public\n' >&2; exit 1; fi
 if grep -R -a -l -e "$root" -e /home/ -e /tmp/ "$work/archive" "$work/srcrock"; then printf 'Local paths in Lua release payload\n' >&2; exit 1; fi

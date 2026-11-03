@@ -34,7 +34,6 @@ slide boundaries.
 [90m>[0m [36m-[0m Quoted list
 [90m>[0m   item with [4m[1;34ma[0m
 [90m>[0m   [4m[1;34mlink[0m
-[90m>[0m   
 [90m>[0m   (https://exampl
 [90m>[0m   e.com/quoted-li
 [90m>[0m   st).
@@ -59,7 +58,6 @@ slide boundaries.
    beta with a
    descriptive link
    to [4m[1;34mthe project[0m
-   
    (https://pkt.sys
    tems/c/libmdf).
 

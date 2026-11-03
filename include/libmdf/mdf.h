@@ -229,9 +229,14 @@ typedef struct mdf_options {
      * Horizontal/vertical/tile charts fit to this width after margins.
      */
     int width;
-    /** ANSI-only left margin emitted on non-empty lines, including chart lines; mutable through set_geometry. */
+    /** ANSI-only left margin on non-empty hard lines, including charts; terminal-wrapped URL continuation rows are unindented. Mutable through set_geometry. */
     int margin_left;
-    /** ANSI-only right margin; reduces available text and chart width; mutable through set_geometry. */
+    /**
+     * ANSI-only right margin; reduces text/chart width. With zero, visible URLs
+     * outside table cells remain contiguous and use terminal autowrap, even with
+     * a left margin. width must match the terminal columns for subsequent text
+     * layout. Positive values hard-wrap URLs. Mutable through set_geometry.
+     */
     int margin_right;
     /** Disable decoration independently of ansi_mode; may still emit ANSI resets/OSC8 unless OFF. Charts retain shapes. */
     int boring;

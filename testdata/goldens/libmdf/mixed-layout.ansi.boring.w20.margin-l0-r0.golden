@@ -10,8 +10,7 @@ wrapping, inline
 emphasis, strong
 text, inline code,
 links, autolinks
-like https://example.com/
-mixed, tables,
+like https://example.com/mixed, tables,
 charts, quotes,
 lists, code, and
 deck slide
@@ -33,10 +32,7 @@ boundaries.
 >   text.
 > - Quoted list item
 >   with a link
->   
->   (https://example
->   .com/quoted-list
->   ).
+>   (https://example.com/quoted-list).
 
 - Top-level list
   item with enough
@@ -56,9 +52,7 @@ boundaries.
    with a
    descriptive link
    to the project
-   
-   (https://pkt.syst
-   ems/c/libmdf).
+   (https://pkt.systems/c/libmdf).
 
 # Table And Code
 

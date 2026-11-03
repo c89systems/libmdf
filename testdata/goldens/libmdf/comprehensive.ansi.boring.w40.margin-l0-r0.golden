@@ -79,8 +79,7 @@ and laptop screens.
 Plain text can include emphasis, strong
 text, combined emphasis, inline code,
 links (https://example.com/deck), and
-autolinks like https://example.com/
-autolink.
+autolinks like https://example.com/autolink.
 
 # Lists
 
@@ -312,8 +311,7 @@ Primary documentation link
 
 A longer link label that wraps across
 lines in narrow viewports
-(https://example.com/docs/deck/mode/long
-/link)
+(https://example.com/docs/deck/mode/long/link)
 
 Link activation should not accidentally
 advance the deck. Focus should remain
@@ -322,8 +320,7 @@ usable on the current slide only.
 # Image Syntax
 
 !Tiny transparent pixel
-(data:image/gif;base64,R0lGODlhAQABAAAAA
-Cw=)
+(data:image/gif;base64,R0lGODlhAQABAAAAACw=)
 
 This exercises Markdown image output
 without requiring network access. The

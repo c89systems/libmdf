@@ -1592,7 +1592,8 @@ static int test_fallback_link_punctuation_contract(void)
         opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
         opts.osc8 = 0;
         opts.boring = mode != 2;
-        opts.width = 12;
+        opts.width = 13;
+        opts.margin_right = 1;
         st = render_capture(MDF_FORMAT_ANSI, &opts,
                             "([https://abcdef](x)) tail\n", 4096, &cap);
         fails += expect(st == MDF_OK && cap.failed == 0,
@@ -1602,7 +1603,7 @@ static int test_fallback_link_punctuation_contract(void)
                         "URI fallback keeps its first chunk with the opening parenthesis");
         free(plain);
         fails += expect_trace_matches_writes(&cap, "parenthesized URI fallback writes match traces");
-        fails += expect_line_margins(cap.out, 0, opts.width, "URI fallback respects line width");
+        fails += expect_line_margins(cap.out, 0, opts.width - opts.margin_right, "URI fallback respects line width");
         for (i = 0; i < sizeof(fragments) / sizeof(fragments[0]); i++) {
             st = incremental_capture(&opts, "([https://abcdef](x)) tail\n", fragments[i], &split);
             fails += expect(st == MDF_OK && split.failed == 0,
@@ -1613,6 +1614,350 @@ static int test_fallback_link_punctuation_contract(void)
             capture_free(&split);
         }
         capture_free(&cap);
+    }
+    return fails;
+}
+
+static int test_long_link_margin_contract(void)
+{
+#define LONG_LINK_URL "https://www.clasohlson.com/se/Netatmo-smart-vaderstation-WiFi/p/36-5561?msockid=3054df9ac0a06177121bc900c1fb60c4&utm_source=openai"
+    static const char url[] = LONG_LINK_URL;
+    static const char *const markdown[] = {
+        "Text ([site](" LONG_LINK_URL ")).\n",
+        "- Text ([site](" LONG_LINK_URL ")).\n",
+        "1. Text ([site](" LONG_LINK_URL ")).\n",
+        "> Text ([site](" LONG_LINK_URL ")).\n",
+        "> - Text ([site](" LONG_LINK_URL ")).\n",
+        "- Text [site](" LONG_LINK_URL ") tail.\n"
+    };
+#undef LONG_LINK_URL
+    static const size_t fragments[] = {1, 7};
+    mdf_options opts;
+    capture whole;
+    capture split;
+    mdf_status st;
+    char *plain;
+    char *compact;
+    size_t i;
+    size_t j;
+    size_t off;
+    size_t kept;
+    int mode;
+    int margin;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 3; mode++) {
+        for (margin = 0; margin <= 2; margin += 2) {
+            for (i = 0; i < sizeof(markdown) / sizeof(markdown[0]); i++) {
+                mdf_options_init(&opts);
+                opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+                opts.boring = mode == 1;
+                opts.osc8 = 0;
+                opts.width = 31;
+                opts.margin_right = 1;
+                opts.margin_left = margin;
+                st = render_capture(MDF_FORMAT_ANSI, &opts, markdown[i], 4096, &whole);
+                fails += expect(st == MDF_OK && whole.failed == 0,
+                                "long fallback link renders with configured margins");
+                fails += expect_trace_matches_writes(&whole,
+                                                     "long fallback link writes match traces");
+                fails += expect_line_margins(whole.out, margin, opts.width - opts.margin_right,
+                                            "long fallback link remains inside the configured width");
+                plain = whole.out == NULL ? NULL : strip_ansi(whole.out);
+                fails += expect(plain != NULL, "long fallback link has visible output");
+                if (plain != NULL) {
+                    fails += expect_not_contains(plain, "\n\n", "long fallback link has no extra blank line");
+                    fails += expect_not_contains(plain, "\n    \n", "long list link has no empty continuation line");
+                    fails += expect_not_contains(plain, "\n  >   \n", "long quoted list link has no empty continuation line");
+                    fails += expect_not_contains(plain, "\n  > \n", "long quote link has no empty continuation line");
+                    compact = (char *)malloc(strlen(plain) + 1);
+                    fails += expect(compact != NULL, "long fallback link output can be checked");
+                    if (compact != NULL) {
+                        kept = 0;
+                        for (off = 0; plain[off] != '\0'; off++) {
+                            if (plain[off] != ' ' && plain[off] != '\n' && plain[off] != '>')
+                                compact[kept++] = plain[off];
+                        }
+                        compact[kept] = '\0';
+                        fails += expect_contains(compact, url,
+                                                 "long fallback link retains every destination byte");
+                        free(compact);
+                    }
+                    free(plain);
+                }
+                for (j = 0; j < sizeof(fragments) / sizeof(fragments[0]); j++) {
+                    st = render_capture(MDF_FORMAT_ANSI, &opts, markdown[i], fragments[j], &split);
+                    fails += expect(st == MDF_OK && split.failed == 0,
+                                    "fragmented long fallback link renders");
+                    fails += expect_trace_matches_writes(&split,
+                                                         "fragmented long fallback link writes match traces");
+                    fails += expect_capture_writes_equal(&split, &whole,
+                                                         "long fallback link decisions survive source fragments");
+                    capture_free(&split);
+                    st = incremental_capture(&opts, markdown[i], fragments[j], &split);
+                    fails += expect(st == MDF_OK && split.failed == 0,
+                                    "incremental long fallback link renders");
+                    fails += expect_trace_matches_writes(&split,
+                                                         "incremental long fallback link writes match traces");
+                    fails += expect_capture_writes_equal(&split, &whole,
+                                                         "long fallback link decisions survive feeds and flushes");
+                    capture_free(&split);
+                }
+                capture_free(&whole);
+            }
+        }
+    }
+    return fails;
+}
+
+static int test_terminal_wrapped_links_contract(void)
+{
+#define TERMINAL_URL "https://www.clasohlson.com/se/Netatmo-smart-vaderstation-WiFi/p/36-5561?msockid=3054df9ac0a06177121bc900c1fb60c4&utm_source=openai"
+    static const char *const markdown[] = {
+        "Text ([site](" TERMINAL_URL ")). alpha beta gamma delta epsilon.\n",
+        "- Text ([site](" TERMINAL_URL ")). alpha beta gamma delta epsilon.\n",
+        "> - Text ([site](" TERMINAL_URL ")). alpha beta gamma delta epsilon.\n",
+        "<" TERMINAL_URL "> alpha beta gamma delta epsilon.\n",
+        TERMINAL_URL " alpha beta gamma delta epsilon.\n",
+        "[" TERMINAL_URL "](" TERMINAL_URL ") alpha beta gamma delta epsilon.\n"
+    };
+    static const size_t fragments[] = {1, 7};
+    mdf_options opts;
+    capture whole;
+    capture split;
+    mdf_status st;
+    char *plain;
+    size_t i;
+    size_t j;
+    int margin;
+    int mode;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 3; mode++) {
+        for (margin = 0; margin <= 6; margin += 2) {
+            for (i = 0; i < sizeof(markdown) / sizeof(markdown[0]); i++) {
+                mdf_options_init(&opts);
+                opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+                opts.boring = mode == 1;
+                opts.width = 30;
+                opts.margin_left = margin;
+                st = render_capture(MDF_FORMAT_ANSI, &opts, markdown[i], 4096, &whole);
+                fails += expect(st == MDF_OK && whole.failed == 0,
+                                "terminal-wrapped link renders successfully");
+                fails += expect_contains(whole.out, TERMINAL_URL,
+                                         "zero-right-margin URL is byte-contiguous, without LF, spaces or SGR inside it");
+                fails += expect_trace_matches_writes(&whole,
+                                                     "terminal-wrapped link writes match traces");
+                for (j = 0; j < sizeof(fragments) / sizeof(fragments[0]); j++) {
+                    st = incremental_capture(&opts, markdown[i], fragments[j], &split);
+                    fails += expect(st == MDF_OK && split.failed == 0,
+                                    "incremental terminal-wrapped link renders");
+                    fails += expect_trace_matches_writes(&split,
+                                                         "terminal-wrapped incremental writes match traces");
+                    fails += expect_capture_writes_equal(&split, &whole,
+                                                         "terminal wrap decisions survive feeds and flushes");
+                    capture_free(&split);
+                }
+                capture_free(&whole);
+            }
+        }
+    }
+#undef TERMINAL_URL
+    mdf_options_init(&opts);
+    opts.ansi_mode = MDF_ANSI_OFF;
+    opts.width = 12;
+    opts.margin_left = 2;
+    st = render_capture(MDF_FORMAT_ANSI, &opts,
+                        "[x](https://x/01234567890) abc defgh ijkl\n", 1, &whole);
+    fails += expect(st == MDF_OK, "text after a naturally wrapped URL renders");
+    plain = whole.out == NULL ? NULL : strip_ansi(whole.out);
+    fails += expect(plain != NULL &&
+                    strcmp(plain, "  x\n  (https://x/01234567890) abc defgh\n  ijkl\n") == 0,
+                    "following words use the terminal cursor after natural URL wrapping");
+    free(plain);
+    fails += expect_trace_matches_writes(&whole, "natural wrap cursor regression writes match traces");
+    capture_free(&whole);
+    st = render_capture(MDF_FORMAT_ANSI, &opts,
+                        "[x](https://x/0123456789) abc defgh ijkl\n", 1, &whole);
+    fails += expect(st == MDF_OK, "URL ending at the exact terminal edge renders");
+    fails += expect_output_equals(&whole,
+                                   "  x\n  (https://x/0123456789)\n  abc defgh\n  ijkl\n",
+                                   "exact-edge URI preserves terminal delayed wrap when the next word is placed");
+    fails += expect_trace_matches_writes(&whole, "exact-edge URL writes match traces");
+    capture_free(&whole);
+    st = render_capture(MDF_FORMAT_ANSI, &opts,
+                        "www.1234567890.com abc defgh ijkl\n", 1, &whole);
+    fails += expect(st == MDF_OK, "bare www URL uses terminal autowrap");
+    fails += expect_output_equals(&whole, "  www.1234567890.com abc\n  defgh ijkl\n",
+                                   "words after a bare www URL use the physical continuation column");
+    fails += expect_trace_matches_writes(&whole, "bare www URL writes match traces");
+    capture_free(&whole);
+    return fails;
+}
+
+static int test_scheme_relative_url_cursor_contract(void)
+{
+    static const char markdown[] = "//localhost/abcdefghijklmnopqrstuvwxyz a b c d e f\n";
+    static const struct {
+        int left;
+        const char *expected;
+    } cases[] = {
+        {0, "//localhost/abcdefghijklmnopqrstuvwxyz a\nb c d e f\n"},
+        {2, "  //localhost/abcdefghijklmnopqrstuvwxyz\n  a b c d e f\n"},
+        {6, "      //localhost/abcdefghijklmnopqrstuvwxyz a b c d e f\n"}
+    };
+    static const size_t fragments[] = {1, 7};
+    mdf_options opts;
+    capture whole;
+    capture split;
+    mdf_status st;
+    char *plain;
+    size_t i;
+    size_t j;
+    int mode;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 3; mode++) {
+        for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            mdf_options_init(&opts);
+            opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+            opts.boring = mode == 1;
+            opts.width = 20;
+            opts.margin_left = cases[i].left;
+            st = render_capture(MDF_FORMAT_ANSI, &opts, markdown, 4096, &whole);
+            fails += expect(st == MDF_OK && whole.failed == 0, "scheme-relative URL renders");
+            plain = whole.out == NULL ? NULL : strip_ansi(whole.out);
+            fails += expect(plain != NULL && strcmp(plain, cases[i].expected) == 0,
+                            "scheme-relative URL uses the physical column for following words");
+            free(plain);
+            fails += expect_contains(whole.out, "//localhost/abcdefghijklmnopqrstuvwxyz",
+                                     "scheme-relative URL bytes stay contiguous");
+            fails += expect_trace_matches_writes(&whole, "scheme-relative URL writes match traces");
+            for (j = 0; j < sizeof(fragments) / sizeof(fragments[0]); j++) {
+                st = render_capture(MDF_FORMAT_ANSI, &opts, markdown, fragments[j], &split);
+                fails += expect(st == MDF_OK && split.failed == 0, "fragmented scheme-relative URL renders");
+                fails += expect_trace_matches_writes(&split, "fragmented scheme-relative URL writes match traces");
+                fails += expect_capture_writes_equal(&split, &whole, "scheme-relative URL source fragments preserve decisions");
+                capture_free(&split);
+                st = incremental_capture(&opts, markdown, fragments[j], &split);
+                fails += expect(st == MDF_OK && split.failed == 0, "incremental scheme-relative URL renders");
+                fails += expect_trace_matches_writes(&split, "incremental scheme-relative URL writes match traces");
+                fails += expect_capture_writes_equal(&split, &whole, "scheme-relative URL feeds and flushes preserve decisions");
+                capture_free(&split);
+            }
+            capture_free(&whole);
+        }
+    }
+    return fails;
+}
+
+static int test_styled_prefixed_terminal_urls_contract(void)
+{
+#define STYLED_URL "https://example.com/abcdefghijklmnopqrstuvwxyz"
+    static const struct {
+        const char *markdown;
+        const char *url;
+        int width;
+        const char *left2_output;
+    } cases[] = {
+        {"**" STYLED_URL "**\n", STYLED_URL, 12, NULL},
+        {"*" STYLED_URL "* a b c d e f\n", STYLED_URL, 12,
+         "  " STYLED_URL "\n  a b c d e\n  f\n"},
+        {"***" STYLED_URL "***. a b c d e f\n", STYLED_URL, 12, NULL},
+        {"**https://example.com/abc**defghijklmnopqrstuvwxyz a b c d e f\n", STYLED_URL, 12, NULL},
+        {"**https://example**.com/abcdefghijklmnopqrstuvwxyz a b c d e f\n", STYLED_URL, 12, NULL},
+        {"- **" STYLED_URL "** a b c d e f\n", STYLED_URL, 12, NULL},
+        {"> **" STYLED_URL "** a b c d e f\n", STYLED_URL, 12, NULL},
+        {"- //localhost/abcdefghijklmnopqrstuv a b c d e f\n", "//localhost/abcdefghijklmnopqrstuv", 20,
+         "  - //localhost/abcdefghijklmnopqrstuv a\n    b c d e f\n"},
+        {"> - //localhost/abcdefghijklmnopqrstuv a b c d e f\n", "//localhost/abcdefghijklmnopqrstuv", 20, NULL},
+        {"**//localhost/abcdefghijklmnopqrstuv** a b c d e f\n", "//localhost/abcdefghijklmnopqrstuv", 20, NULL},
+        {"//abcdefghijklmnopqrstuv a b c d e f\n", "//abcdefghijklmnopqrstuv", 12,
+         "  //abcdefghijklmnopqrstuv a b c d e\n  f\n"},
+        {"- //abcdefghijklmnopqrstuv a b c d e f\n", "//abcdefghijklmnopqrstuv", 12, NULL},
+        {"**//abcdefghijklmnopqrstuv** a b c d e f\n", "//abcdefghijklmnopqrstuv", 12, NULL}
+    };
+#undef STYLED_URL
+    static const size_t fragments[] = {1, 7};
+    mdf_options opts;
+    capture whole;
+    capture split;
+    mdf_status st;
+    char *plain;
+    size_t i;
+    size_t j;
+    int margin;
+    int mode;
+    int before;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 3; mode++) {
+        for (margin = 0; margin <= 6; margin += 2) {
+            for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+                before = fails;
+                mdf_options_init(&opts);
+                opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+                opts.boring = mode == 1;
+                opts.width = cases[i].width;
+                opts.margin_left = margin;
+                st = render_capture(MDF_FORMAT_ANSI, &opts, cases[i].markdown, 4096, &whole);
+                fails += expect(st == MDF_OK && whole.failed == 0, "styled/prefixed URL renders");
+                fails += expect_contains(whole.out, cases[i].url, "styled/prefixed URL is byte-contiguous");
+                fails += expect_write_contains(&whole, cases[i].url, "styled/prefixed URL is one decision emission");
+                fails += expect_trace_matches_writes(&whole, "styled/prefixed URL sink writes match traces");
+                if (margin == 2 && cases[i].left2_output != NULL) {
+                    plain = whole.out == NULL ? NULL : strip_ansi(whole.out);
+                    fails += expect(plain != NULL && strcmp(plain, cases[i].left2_output) == 0,
+                                    "following words use the styled/prefixed URL's physical column");
+                    free(plain);
+                }
+                for (j = 0; j < sizeof(fragments) / sizeof(fragments[0]); j++) {
+                    st = render_capture(MDF_FORMAT_ANSI, &opts, cases[i].markdown, fragments[j], &split);
+                    fails += expect(st == MDF_OK && split.failed == 0, "fragmented styled/prefixed URL renders");
+                    fails += expect_trace_matches_writes(&split, "fragmented styled/prefixed URL sink writes match traces");
+                    fails += expect_capture_writes_equal(&split, &whole, "styled/prefixed URL preserves source decisions");
+                    capture_free(&split);
+                    st = incremental_capture(&opts, cases[i].markdown, fragments[j], &split);
+                    fails += expect(st == MDF_OK && split.failed == 0, "incremental styled/prefixed URL renders");
+                    fails += expect_trace_matches_writes(&split, "incremental styled/prefixed URL sink writes match traces");
+                    fails += expect_capture_writes_equal(&split, &whole, "styled/prefixed URL preserves feed/flush decisions");
+                    capture_free(&split);
+                }
+                capture_free(&whole);
+                if (fails != before) {
+                    fprintf(stderr, "  URL case %lu mode %d margin %d: %s",
+                            (unsigned long)i, mode, margin, cases[i].markdown);
+                }
+            }
+        }
+        mdf_options_init(&opts);
+        opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+        opts.boring = mode == 1;
+        opts.width = 12;
+        opts.margin_left = 2;
+        opts.margin_right = 2;
+        st = render_capture(MDF_FORMAT_ANSI, &opts, cases[0].markdown, 1, &whole);
+        fails += expect(st == MDF_OK && !whole.failed, "positive right margin still wraps styled URLs");
+        fails += expect_line_margins(whole.out, 2, 10, "styled URL respects a positive right margin");
+        fails += expect_trace_matches_writes(&whole, "hard-wrapped styled URL writes match traces");
+        capture_free(&whole);
+        opts.margin_right = 0;
+        opts.emission_buffer.initial_cap = 16;
+        opts.emission_buffer.max_cap = 32;
+        st = render_capture(MDF_FORMAT_ANSI, &opts, cases[0].markdown, 4096, &whole);
+        fails += expect(st == MDF_ERROR_NOMEM && !whole.failed, "styled URL fails instead of splitting an oversized emission");
+        fails += expect_no_write_contains(&whole, "https://", "oversized styled URL emits no partial URI");
+        fails += expect_trace_matches_writes(&whole, "oversized styled URL writes match traces");
+        st = incremental_capture(&opts, cases[0].markdown, 1, &split);
+        fails += expect(st == MDF_ERROR_NOMEM && !split.failed, "incremental styled URL respects the emission bound");
+        fails += expect_trace_matches_writes(&split, "incremental oversized styled URL writes match traces");
+        fails += expect_capture_writes_equal(&split, &whole, "oversized styled URL preserves failure decisions across feeds");
+        capture_free(&split);
+        capture_free(&whole);
     }
     return fails;
 }
@@ -2944,7 +3289,7 @@ static int test_runtime_width_quoted_list_autolink_contract(void)
     static const char suffix[] = " next\n";
     static const char complete[] = "> 1. <https://example.com> next\n";
     static const char expected_boring[] =
-        "> 1.\n>    https://example.com\n>    next\n";
+        "> 1.\n>    https://example.com next\n";
     mdf_options opts;
     mdf_sink sink;
     mdf *inst;
@@ -4069,8 +4414,8 @@ static int test_ansi_nested_emphasis_edge_contract(void)
     fails += expect_trace_matches_writes(&cap,
                                          "ansi wrapped URL link label heading writes match traces");
     fails += expect_contains(cap.out,
-                             "\033[4m\033[1;34mhttps://\033[0m\n  \033[4m\033[1;34mpkt.systems/\033[0m\n  \033[4m\033[1;34mcentaur.md\033[0m",
-                             "ansi wrapped URL link label reapplies link styling after every row reset");
+                             "\033[4m\033[1;34mhttps://pkt.systems/centaur.md",
+                             "ansi terminal-wrapped URL link label keeps styling outside the contiguous URL");
     capture_free(&cap);
 
     mdf_options_init(&opts);
@@ -5418,6 +5763,10 @@ int main(int argc, char **argv)
     fails += test_chart_trace_contract();
     fails += test_runtime_width_autolink_contract();
     fails += test_fallback_link_punctuation_contract();
+    fails += test_long_link_margin_contract();
+    fails += test_terminal_wrapped_links_contract();
+    fails += test_scheme_relative_url_cursor_contract();
+    fails += test_styled_prefixed_terminal_urls_contract();
     fails += test_link_destination_parentheses_contract();
     fails += test_table_link_destination_parentheses_contract();
     fails += test_osc8_link_wrapping_contract();

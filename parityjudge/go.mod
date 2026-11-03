@@ -1,4 +1,4 @@
-module github.com/sa6mwa/libmdf/parityjudge
+module github.com/c89systems/libmdf/parityjudge
 
 go 1.26.4
 

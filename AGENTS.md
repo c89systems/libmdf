@@ -114,6 +114,13 @@ accumulating compatibility shims.
 When parity and local inferred behavior disagree, parity wins unless the user
 explicitly changes the contract.
 
+The explicit zero-right-margin URL contract overrides Go's hard wrapping:
+visible terminal URLs remain byte-contiguous and use terminal autowrap,
+regardless of left margin. Native tests pin URI bytes, subsequent cursor layout,
+and real sink/trace parity. Corpus checks for these URI-bearing ANSI documents
+compare fragmented C rendering against whole-source C rendering; other cases
+continue to compare against Go. Do not restore Go's newline insertion in URLs.
+
 ## Release Build Ownership
 
 Build every Release target from this checkout in `build/<target>-release`.

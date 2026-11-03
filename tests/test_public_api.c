@@ -3829,7 +3829,7 @@ int main(void)
     {
         static const char pending_link[] = "[x](https://example.com/abcdefghij)";
         static const char expected_reflow[] =
-            "x \n(https://e\nxample.com\n/abcdefghi\nj)\n";
+            "x \n(https://example.com/abcdefghij)\n";
         emission_log writes;
         emission_log traces;
         mdf_sink bound_sink;

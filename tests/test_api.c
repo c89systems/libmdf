@@ -3174,14 +3174,14 @@ int main(void)
     out = NULL;
     st = renderer->render_cstr(renderer, "Autolinks:\n<https://example.com/path?x=1>\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "narrow autolink render");
-    fails += expect(strstr(out, "example.com/path?x=1") != NULL && strstr(out, "https://example.com/path?x=1") == NULL,
-                    "narrow autolink strips scheme when it is the only way to fit");
+    fails += expect(strstr(out, "https://example.com/path?x=1") != NULL,
+                    "narrow autolink preserves its complete clickable destination");
     renderer->string_free(renderer, out);
     out = NULL;
     st = renderer->render_cstr(renderer, "[ref1]: https://example.com \"Example\"\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "narrow reflink-style url render");
-    fails += expect(strstr(out, "[ref1]: https://\nexample.com\n\"Example\"") != NULL,
-                    "narrow reflink-style url keeps its scheme delimiter together");
+    fails += expect(strstr(out, "[ref1]: https://example.com \"Example\"") != NULL,
+                    "narrow reflink-style URL uses terminal continuation without splitting its bytes");
     renderer->string_free(renderer, out);
     out = NULL;
     opts.boring = 0;
@@ -3218,15 +3218,14 @@ int main(void)
     out = NULL;
     st = renderer->render_cstr(renderer, "A | [site](https://example.com)\nnot a table\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "styled narrow mixed url word render");
-    fails += expect(strstr(out, "site\033[0m\n(https://example.com\n) not a table") != NULL &&
-                    strstr(out, "(\033[90mhttps://example.com\033[0m") == NULL,
-                    "overlong mixed text and fallback url word follows Go split styling");
+    fails += expect(strstr(out, "site\033[0m\n(\033[90mhttps://example.com\033[0m) not a table") != NULL,
+                    "overlong fallback URL stays contiguous and preserves link styling");
     renderer->string_free(renderer, out);
     out = NULL;
     st = renderer->render_cstr(renderer, "[https://pkt.systems/centaur.md](https://pkt.systems/centaur.md)\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "styled narrow url label render");
-    fails += expect(strstr(out, "\033[4m\033[1;34mhttps://pkt.systems/\n") != NULL,
-                    "url-shaped link label keeps its scheme delimiter together");
+    fails += expect(strstr(out, "\033[4m\033[1;34mhttps://pkt.systems/centaur.md") != NULL,
+                    "URL-shaped link label remains byte-contiguous");
     renderer->string_free(renderer, out);
     out = NULL;
     st = renderer->render_cstr(renderer, "Inline HTML: <span class=\"note\">note</span> and <strong>strong</strong>.\n", &out);
@@ -3790,13 +3789,13 @@ int main(void)
     out = NULL;
     st = renderer->render_cstr(renderer, "* github.com/yuin/goldmark +\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "styled narrow plain path render");
-    fails += expect(strstr(out, "\033[36m-\033[0m github.com/yuin/gold\n  mark +") != NULL,
-                    "path-like list words wrap at full width from the bullet prefix line");
+    fails += expect(strstr(out, "\033[36m-\033[0m github.com/yuin/goldmark +") != NULL,
+                    "domain/path links in lists use terminal autowrap");
     renderer->string_free(renderer, out);
     out = NULL;
     st = renderer->render_cstr(renderer, "* github.com/yuin/goldmark + extension.GFM (parity reference only; streaming is the long-term path)\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "styled narrow dotted suffix path render");
-    fails += expect(strstr(out, "\033[36m-\033[0m github.com/yuin/gold\n  mark +\n  extension.GFM\n  (parity reference\n  only; streaming is\n  the long-term\n  path)") != NULL,
+    fails += expect(strstr(out, "\033[36m-\033[0m github.com/yuin/goldmark +\n  extension.GFM\n  (parity reference\n  only; streaming is\n  the long-term\n  path)") != NULL,
                     "dotted words without a slash wrap before the word instead of splitting like a URL path");
     renderer->string_free(renderer, out);
     out = NULL;

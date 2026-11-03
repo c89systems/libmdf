@@ -1,0 +1,129 @@
+  # Terminal-wrapped links
+
+  Render this document with
+  OSC8 off and a zero right
+  margin to check contiguous
+  URL bytes and natural
+  terminal wrapping. Words
+  after each URL should resume
+  at the correct column, then
+  wrap normally with the
+  configured left margin.
+
+  Click detection also depends
+  on the terminal and
+  multiplexer. For tmux, use
+  OSC8 on with a supporting
+  terminal and tmux's
+  hyperlinks feature enabled.
+  The no-OSC8 goldens verify
+  URL bytes and layout;
+  mouse-click handling belongs
+  to the terminal and
+  multiplexer.
+
+  The example.com addresses
+  below are rendering
+  examples, not live
+  documentation pages.
+
+  ## Paragraph
+
+  Read the long report
+  (https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden) and
+  then keep reading this
+  sentence. These words should
+  fill the space left on the
+  terminal row before the next
+  ordinary line break.
+
+  ## Bare URL
+
+  https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden
+  followed by ordinary words
+  that should still wrap
+  normally after the address.
+
+  ## Angle-bracket autolink
+
+  https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden
+  followed by another
+  sentence. Its placement
+  should use the cursor
+  reached after the terminal
+  wraps the URL.
+
+  ## Lists
+
+  - Read the same long report
+    (https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden).
+    The URL continuation rows
+    should contain no inserted
+    list indentation. These
+    following words should
+    wrap normally.
+  - A second item confirms
+    that the usual list
+    indentation returns after
+    the link-containing item.
+
+  1. An ordered item with a
+     parenthesized citation
+     (https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden)
+     and enough following text
+     to exercise another
+     ordinary line break.
+  2. The next ordered item
+     should retain its normal
+     marker and indentation.
+
+  ## Quoted list
+
+  > - A quote containing the
+  >   long report
+  >   (https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden).
+  >   The address must not
+  >   gain quote markers or
+  >   spaces between its
+  >   bytes. The text after it
+  >   should wrap normally.
+  > - The next quoted item
+  >   should regain its normal
+  >   quote and list prefixes.
+
+  ## Bare hostname
+
+  www.terminal-wrap-demonstration-with-a-long-hostname.that-still-has-valid-length-dns-labels.example.com followed by
+  ordinary words. The same
+  cursor accounting should
+  work for an address without
+  an explicit scheme.
+
+  ## Scheme-relative address
+
+  //localhost/abcdefghijklmnopqrstuvwxyz a b c d e f
+
+  - //localhost/abcdefghijklmnopqrstuv a b c d e f
+
+  //abcdefghijklmnopqrstuv a b
+  c d e f
+
+  ## Styled addresses
+
+  https://example.com/abcdefghijklmnopqrstuvwxyz a b c d e f
+
+  https://example.com/abcdefghijklmnopqrstuvwxyz. a b c d e
+  f
+
+  https://example.com/abcdefghijklmnopqrstuvwxyz a b c d e f
+
+  ## Parentheses inside a
+     destination
+
+  David Teece's Profiting from
+  Technological Innovation
+  (https://doi.org/10.1016/0048-7333(86)90027-2) keeps the
+  full DOI, including its
+  parentheses. This final
+  sentence should wrap
+  normally too.

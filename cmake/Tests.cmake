@@ -92,13 +92,17 @@ if(LIBMDF_BUILD_TESTS)
   set_tests_properties(test_contracts PROPERTIES LABELS "unit;streaming;api" TIMEOUT 10)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64"
      AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
-    find_program(LIBMDF_TEST_CXX NAMES c++ g++ REQUIRED)
+    enable_language(CXX)
     foreach(kind static shared)
       if(TARGET mdf_${kind})
-        add_test(NAME theme_palette_cpp_${kind} COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_theme_cpp.sh"
-          "${LIBMDF_TEST_CXX}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_theme_palette.c"
-          "${LIBMDF_GENERATED_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include"
-          "$<TARGET_FILE:mdf_${kind}>" "${CMAKE_CURRENT_BINARY_DIR}/theme_palette_cpp_${kind}")
+        add_executable(test_theme_palette_cpp_${kind} tests/test_theme_palette.cpp)
+        set_target_properties(test_theme_palette_cpp_${kind} PROPERTIES
+          CXX_STANDARD 98 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+        target_compile_options(test_theme_palette_cpp_${kind} PRIVATE
+          -pedantic-errors -Wall -Wextra -Werror)
+        target_link_libraries(test_theme_palette_cpp_${kind} PRIVATE mdf_${kind})
+        libmdf_configure_development_runtime(test_theme_palette_cpp_${kind})
+        add_test(NAME theme_palette_cpp_${kind} COMMAND test_theme_palette_cpp_${kind})
         set_tests_properties(theme_palette_cpp_${kind} PROPERTIES LABELS "unit;api" TIMEOUT 15)
       endif()
     endforeach()

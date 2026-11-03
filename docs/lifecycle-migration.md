@@ -12,6 +12,13 @@ former service endpoint. Linux toolchains already use the declared global
 `~/.cache/cpkt/deps`. Clang/LLVM and approved osxcross/Apple inputs stay
 operator-managed prerequisites.
 
+Linux library-only configurations also require the pinned Bootlin toolchain.
+C++98 public API checks are native CMake targets using that collection and its
+development runtime, with the same ELF checks as the C tests. Golden-update
+entrypoints refresh their producers through CMake before recording output. The
+unregistered legacy Python browser-audit controller has been removed; it was
+not part of any required check.
+
 The native Debug build publishes the compilation database at the path selected
 by `.clangd` and prepares its actual generated/dependency headers. Editor flags
 come from each target, preserving the Lua binding's C99 contract. The native

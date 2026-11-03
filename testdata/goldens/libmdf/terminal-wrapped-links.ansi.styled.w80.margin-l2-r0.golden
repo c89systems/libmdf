@@ -1,0 +1,76 @@
+  [1;32m# [0m[1;32mTerminal-wrapped links[0m
+
+  Render this document with OSC8 off and a zero right margin to check contiguous
+  URL bytes and natural terminal wrapping. Words after each URL should resume at
+  the correct column, then wrap normally with the configured left margin.
+
+  Click detection also depends on the terminal and multiplexer. For tmux, use
+  OSC8 on with a supporting terminal and tmux's hyperlinks feature enabled. The
+  no-OSC8 goldens verify URL bytes and layout; mouse-click handling belongs to
+  the terminal and multiplexer.
+
+  The example.com addresses below are rendering examples, not live documentation
+  pages.
+
+  [1;34m## [0m[1;34mParagraph[0m
+
+  Read the [4m[1;34mlong report[0m
+  ([90mhttps://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden[0m) and then keep reading this sentence. These words should fill the
+  space left on the terminal row before the next ordinary line break.
+
+  [1;34m## [0m[1;34mBare URL[0m
+
+  https://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden followed by ordinary words that should still wrap normally after
+  the address.
+
+  [1;34m## [0m[1;34mAngle-bracket autolink[0m
+
+  [4m[1;34mhttps://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden[0m followed by another sentence. Its placement should use the cursor
+  reached after the terminal wraps the URL.
+
+  [1;34m## [0m[1;34mLists[0m
+
+  [36m-[0m Read the [4m[1;34msame long report[0m
+    ([90mhttps://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden[0m). The URL continuation rows should contain no inserted list
+    indentation. These following words should wrap normally.
+  [36m-[0m A second item confirms that the usual list indentation returns after the
+    link-containing item.
+
+  [36m1.[0m An ordered item with a [4m[1;34mparenthesized citation[0m
+     ([90mhttps://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden[0m) and enough following text to exercise another ordinary line
+     break.
+  [36m2.[0m The next ordered item should retain its normal marker and indentation.
+
+  [1;34m## [0m[1;34mQuoted list[0m
+
+  [90m>[0m [36m-[0m A quote containing the [4m[1;34mlong report[0m
+  [90m>[0m   ([90mhttps://example.com/documentation/terminal-wrapping/long-link-demonstration/keeping-the-entire-destination-clickable?session=0123456789abcdef0123456789abcdef&source=golden[0m). The address must not gain quote markers or spaces between
+  [90m>[0m   its bytes. The text after it should wrap normally.
+  [90m>[0m [36m-[0m The next quoted item should regain its normal quote and list prefixes.
+
+  [1;34m## [0m[1;34mBare hostname[0m
+
+  www.terminal-wrap-demonstration-with-a-long-hostname.that-still-has-valid-length-dns-labels.example.com followed by ordinary words. The same cursor accounting
+  should work for an address without an explicit scheme.
+
+  [1;34m## [0m[1;34mScheme-relative address[0m
+
+  //localhost/abcdefghijklmnopqrstuvwxyz a b c d e f
+
+  [36m-[0m //localhost/abcdefghijklmnopqrstuv a b c d e f
+
+  //abcdefghijklmnopqrstuv a b c d e f
+
+  [1;34m## [0m[1;34mStyled addresses[0m
+
+  [1m[1;37mhttps://example.com/abcdefghijklmnopqrstuvwxyz[0m a b c d e f
+
+  [1m[3m[1;35mhttps://example.com/abcdefghijklmnopqrstuvwxyz.[0m a b c d e f
+
+  [1m[1;37mhttps://example.com/abcdefghijklmnopqrstuvwxyz[0m a b c d e f
+
+  [1;34m## [0m[1;34mParentheses inside a destination[0m
+
+  David Teece's [4m[1;34mProfiting from Technological Innovation[0m
+  ([90mhttps://doi.org/10.1016/0048-7333(86)90027-2[0m) keeps the full DOI, including
+  its parentheses. This final sentence should wrap normally too.

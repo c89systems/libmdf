@@ -86,6 +86,9 @@ endforeach()
 if(NOT LIBMDF_BUILD_LIBRARIES)
   message(FATAL_ERROR "libmdf requires LIBMDF_BUILD_STATIC or LIBMDF_BUILD_SHARED")
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT DEFINED LIBMDF_BOOTLIN_cc)
+  message(FATAL_ERROR "Linux builds require a Bootlin CMAKE_TOOLCHAIN_FILE; use a project preset")
+endif()
 
 set(LIBMDF_C89_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/c89_assets.h")
 add_custom_command(OUTPUT "${LIBMDF_C89_HEADER}"

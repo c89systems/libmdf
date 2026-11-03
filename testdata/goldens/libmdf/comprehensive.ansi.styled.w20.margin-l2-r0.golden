@@ -146,13 +146,9 @@
   [1m[1;37mstrong text[0m,
   [1m[3m[1;35mcombined emphasis[0m,
   [35minline code[0m, [4m[1;34mlinks[0m
-  (https://example.co
-  m
-  /deck), and
+  ([90mhttps://example.com/deck[0m), and
   autolinks like
-  https://
-  example.com/
-  autolink.
+  https://example.com/autolink.
 
   [1;32m# [0m[1;32mLists[0m
 
@@ -172,10 +168,7 @@
       item.
     [36m-[0m Nested item
       with [4m[1;34ma link[0m
-      
-      (https://examp
-      le.com/nested)
-      .
+      ([90mhttps://example.com/nested[0m).
 
   [36m1.[0m Ordered item
      one.
@@ -659,19 +652,13 @@
 
   [4m[1;34mPrimary[0m
   [4m[1;34mdocumentation link[0m
-  (https://example.co
-  m
-  /docs)
+  ([90mhttps://example.com/docs[0m)
 
   [4m[1;34mA longer link[0m
   [4m[1;34mlabel that wraps[0m
   [4m[1;34macross lines in[0m
   [4m[1;34mnarrow viewports[0m
-  (https://example.co
-  m
-  /docs/deck/mode/lon
-  g
-  /link)
+  ([90mhttps://example.com/docs/deck/mode/long/link[0m)
 
   Link activation
   should not
@@ -686,11 +673,7 @@
 
   ![4m[1;34mTiny transparent[0m
   [4m[1;34mpixel[0m
-  (data:image/gif;bas
-  e
-  64,R0lGODlhAQABAAAA
-  A
-  Cw=)
+  ([90mdata:image/gif;base64,R0lGODlhAQABAAAAACw=[0m)
 
   This exercises
   Markdown image

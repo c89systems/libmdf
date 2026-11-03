@@ -10,8 +10,7 @@ wrapping, inline
 [3m[34memphasis[0m, [1m[1;37mstrong[0m
 [1m[1;37mtext[0m, [35minline code[0m,
 links, autolinks
-like https://example.com/
-mixed, tables,
+like https://example.com/mixed, tables,
 charts, quotes,
 lists, code, and
 deck slide
@@ -33,10 +32,7 @@ boundaries.
 [90m>[0m   [1m[1;37mtext[0m.
 [90m>[0m [36m-[0m Quoted list item
 [90m>[0m   with [4m[1;34ma link[0m
-[90m>[0m   
-[90m>[0m   (https://example
-[90m>[0m   .com/quoted-list
-[90m>[0m   ).
+[90m>[0m   ([90mhttps://example.com/quoted-list[0m).
 
 [36m-[0m Top-level list
   item with enough
@@ -56,9 +52,7 @@ boundaries.
    with a
    descriptive link
    to [4m[1;34mthe project[0m
-   
-   (https://pkt.syst
-   ems/c/libmdf).
+   ([90mhttps://pkt.systems/c/libmdf[0m).
 
 [1;32m# [0m[1;32mTable And Code[0m
 

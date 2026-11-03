@@ -208,6 +208,11 @@ expect_configured library-tests-without-cmdf \
   -DLIBMDF_BUILD_FUZZERS=OFF \
   -DLIBMDF_INSTALL=OFF
 
+expect_rejected host-only-libraries 'Linux builds require a Bootlin CMAKE_TOOLCHAIN_FILE' \
+  -DLIBMDF_BUILD_BINARY=OFF \
+  -DLIBMDF_BUILD_TESTS=OFF \
+  -DLIBMDF_BUILD_EXAMPLES=OFF
+
 expect_configured shared-only-internal-tests \
   -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchains/x86_64-linux-gnu.cmake" \
   -DLIBMDF_BUILD_STATIC=OFF \

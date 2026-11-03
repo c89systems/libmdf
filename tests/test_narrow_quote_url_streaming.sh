@@ -47,10 +47,10 @@ assert_golden() {
   cmp "$TMP/expected.hex" "$TMP/actual.hex"
 }
 
-# This fixture is pinned to the accepted pre-incremental libmdf behavior.  Go
-# mdf independently establishes the termination requirement.  The timeout is
-# part of the regression: a narrow quote plus a wrapped URL must always make
-# progress rather than repeatedly emitting the quote continuation prefix.
+# This fixture pins progress under an almost-full quote continuation prefix.
+# Go mdf independently establishes the termination requirement. A wrapped URL
+# must consume input without inserting empty continuation lines. The timeout
+# catches repeated prefix emission that makes no progress.
 timeout 5 "$RENDER" --ansi --boring -w 8 --margin-left 0 --margin-right 0 "$INPUT" > "$TMP/libmdf.out"
 assert_golden "$TMP/libmdf.out"
 

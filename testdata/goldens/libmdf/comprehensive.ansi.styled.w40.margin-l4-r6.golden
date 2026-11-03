@@ -376,9 +376,8 @@
     [4m[1;34mA longer link label that wraps[0m
     [4m[1;34macross lines in narrow[0m
     [4m[1;34mviewports[0m
-    (https://example.com/docs/deck/
-    mod
-    e/long/link)
+    (https://example.com/docs/deck
+    /mode/long/link)
 
     Link activation should not
     accidentally advance the deck.
@@ -388,9 +387,8 @@
     [1;32m# [0m[1;32mImage Syntax[0m
 
     ![4m[1;34mTiny transparent pixel[0m
-    (data:image/gif;base64,R0lGODlh
-    AQA
-    BAAAAACw=)
+    (data:image/gif;base64,R0lGODl
+    hAQABAAAAACw=)
 
     This exercises Markdown image
     output without requiring

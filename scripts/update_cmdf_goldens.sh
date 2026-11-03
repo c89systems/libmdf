@@ -6,8 +6,8 @@ CMDF=${LIBMDF_CMDF:-"$ROOT/build/debug/cmdf"}
 INPUT="$ROOT/testdata/deck-corpus/comprehensive.md"
 GOLDEN_DIR="$ROOT/testdata/goldens/cmdf"
 
-if [ ! -x "$CMDF" ]; then
-  "$ROOT/scripts/build.sh" debug
+if [ -z "${LIBMDF_CMDF:-}" ]; then
+  "$ROOT/scripts/build.sh" debug --target cmdf
 fi
 
 mkdir -p "$GOLDEN_DIR"

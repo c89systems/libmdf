@@ -165,7 +165,8 @@ the lifecycle resolver and uses an SDK with the usual `lib` directory.
 
 ```sh
 SDK_PREFIX=/path/to/libmdf-sdk
-eval "$(./scripts/cpkt-toolchains.sh env x86_64-linux-gnu)"
+toolchain_env=$(./scripts/cpkt-toolchains.sh env x86_64-linux-gnu) || exit 1
+eval "$toolchain_env"
 loader=$(find "$CPKT_TOOLCHAIN_SYSROOT/lib" -maxdepth 1 -type f \
   \( -name 'ld-linux*.so*' -o -name 'ld-musl-*.so*' \) -print | sort | head -n 1)
 libgcc_dir=$(dirname -- "$("$CC" -print-file-name=libgcc_s.so.1)")
@@ -531,8 +532,32 @@ outside the Markdown label remain outside the hyperlink, and enclosing
 emphasis, heading, and blockquote styles resume after the link. These
 decisions are preserved across fragmented input and line wraps.
 
+Without OSC8, destinations are printed after the label. When `margin_right` is
+zero, visible URLs outside table cells remain byte-contiguous: no newline,
+indentation or style reset is inserted inside a URL. The terminal wraps long
+URLs naturally, allowing direct terminals to detect the complete address. This
+applies regardless of the left margin; natural continuation rows have no
+inserted left margin.
+Styled URLs follow the same rule. For recognized URL words, emphasis resets
+are deferred until the complete word has been emitted.
+Set `width` to the terminal's physical column count so subsequent words wrap
+from the actual cursor, including delayed wrapping at an exact right edge.
+A positive right margin retains hard URL wrapping. OSC8 remains optional and
+off by default in the library.
+
+Plain-text link detection also depends on the terminal and multiplexer. tmux
+pane redraws can prevent an outer terminal from joining a wrapped address even
+when libmdf emitted its bytes contiguously. Use `cmdf --osc8 on` for explicit
+hyperlink targets through a supporting tmux/terminal combination. tmux 3.4 and
+newer support OSC8; `hyperlinks` must be enabled in tmux's `terminal-features`
+for the outer terminal. This is separate from libmdf's zero-right-margin
+byte/layout contract.
+
 The Go `mdf` implementation is the behavioral reference for ANSI streaming.
-Parity checks compare the C hot path against that reference. Deliberate,
+Zero-right-margin URL layout intentionally differs: native tests pin contiguous
+URI bytes and following cursor layout, while corpus checks compare fragmented
+C output and emissions against whole-source C rendering for URI-bearing ANSI
+documents. Other cases retain Go as the comparison oracle. Deliberate,
 documented exceptions are limited to narrow URI wrapping (libmdf keeps `://`
 atomic rather than rendering a scheme followed by a wrapped `//host`),
 escaped pipes inside table code spans, and correct Markdown link-label handling

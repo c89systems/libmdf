@@ -696,7 +696,7 @@ end
 
 do
   local input = "> 1. <https://example.com> next\n"
-  local expected = "> 1.\n>    https://example.com\n>    next\n"
+  local expected = "> 1.\n>    https://example.com next\n"
   local writes, traces = {}, {}
   local stream = mdf.document_stream({
     format = "ansi", width = 20, ansi_mode = "on", boring = true, osc8 = false,

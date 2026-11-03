@@ -63,6 +63,7 @@ int ansi_ensure_left_margin(mdf_impl *impl, mdf_sink *sink);
 static int ansi_write_word_byte(mdf_impl *impl, mdf_sink *sink, char c);
 static int ansi_handle_visible_space(mdf_impl *impl, mdf_sink *sink);
 int ansi_emit_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len);
+static int ansi_emit_url_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len);
 static int ansi_write_direct_visible(mdf_impl *impl, mdf_sink *sink, const char *s, size_t len);
 static int ansi_begin_osc8_link(mdf_impl *impl, mdf_sink *sink, const char *prefix, const char *url, size_t url_len);
 static int ansi_emit_buffer_append_osc8_start(mdf_impl *impl, const char *prefix, const char *url, size_t url_len);
@@ -76,8 +77,11 @@ static int ansi_write_code_segment(mdf_impl *impl, mdf_sink *sink, const char *s
 static int ansi_write_code_segment_with_prefix(mdf_impl *impl, mdf_sink *sink, const char *prefix, const char *segment, size_t len, int limit);
 static int ansi_write_inline_code_segment_with_prefix(mdf_impl *impl, mdf_sink *sink, const char *prefix, const char *segment, size_t len, int limit);
 static int ansi_current_prefix_width(mdf_impl *impl);
+static int ansi_current_rendered_prefix_width(mdf_impl *impl);
+static void ansi_update_url_output_state(mdf_impl *impl, const char *src, size_t len);
 static int ansi_write_plain_code_wrapped(mdf_impl *impl, mdf_sink *sink, const char *text, size_t len);
 static int ansi_word_has_url_scheme(const char *s, size_t len);
+static int ansi_word_is_url_like(const char *s, size_t len);
 static int ansi_pending_emit_append(mdf_impl *impl, const char *src, size_t len);
 static void ansi_pre_code_reset_line_state(mdf_impl *impl);
 static int ansi_pre_code_wrap_prefix_len(mdf_impl *impl);
@@ -114,6 +118,12 @@ int ansi_wrap_limit(const mdf_impl *impl)
         return 0;
     }
     return impl->opts.width;
+}
+
+static int ansi_terminal_link_wrap(const mdf_impl *impl)
+{
+    return impl->format == MDF_FORMAT_ANSI && impl->opts.width > 0 &&
+           impl->opts.margin_right == 0 && !impl->opts.osc8 && !impl->table_cell_mode;
 }
 
 int ansi_content_limit(mdf_impl *impl)
@@ -318,6 +328,13 @@ static int ansi_word_has_url_scheme(const char *s, size_t len)
     return has_dot && has_slash;
 }
 
+static int ansi_word_is_url_like(const char *s, size_t len)
+{
+    return ansi_word_has_url_scheme(s, len) ||
+           (len >= 2 && s[0] == '/' && s[1] == '/') ||
+           (len >= 4 && memcmp(s, "www.", 4) == 0);
+}
+
 static int ansi_word_ends_with_uri_scheme(const char *s, size_t len)
 {
     size_t i;
@@ -466,9 +483,10 @@ static int ansi_write_split_word_full_width(mdf_impl *impl, mdf_sink *sink, cons
     if (limit <= 0) {
         return ansi_write_direct_visible(impl, sink, src, len);
     }
-    url_like = ansi_word_has_url_scheme(src, len) ||
-               (len >= 2 && src[0] == '/' && src[1] == '/') ||
-               (len >= 4 && src[0] == 'w' && src[1] == 'w' && src[2] == 'w' && src[3] == '.');
+    url_like = ansi_word_is_url_like(src, len);
+    if (url_like && ansi_terminal_link_wrap(impl)) {
+        return ansi_emit_url_chunk(impl, sink, src, len);
+    }
     off = 0;
     while (off < len) {
         size_t split;
@@ -537,6 +555,9 @@ static int ansi_write_styled_split_word_full_width(mdf_impl *impl, mdf_sink *sin
     int chunk_cols;
     int limit;
 
+    if (ansi_terminal_link_wrap(impl) && ansi_word_is_url_like(src, len)) {
+        return ansi_emit_styled_visible_chunk(impl, sink, style, src, len);
+    }
     limit = ansi_content_limit(impl);
     if (limit <= 0) {
         if (ansi_emit_styled_prefix(impl, sink, style) != 0) return -1;
@@ -1009,6 +1030,8 @@ static int ansi_sim_emit_styled_direct(mdf_impl *impl, mdf_sink *sink, const cha
             if (ansi_write_direct_visible(impl, sink, text + off, len - off) != 0) return -1;
             break;
         }
+        /* Account for the lazy margin before sizing this visible chunk. */
+        if (ansi_ensure_left_margin(impl, sink) != 0) return -1;
         avail = impl->opts.width - impl->ansi_col;
         if (avail <= 0) {
             if (ansi_sim_style_switch(impl, sink, active_style, &ansi_sim_empty_style) != 0) return -1;
@@ -1189,7 +1212,8 @@ static int ansi_sim_emit_atoms(mdf_impl *impl, mdf_sink *sink, const ansi_sim_wo
 {
     size_t i;
 
-    if (word->atom_count > 1 && ansi_sim_atom_kind(&word->atoms[0]) == ANSI_SIM_PREFIX) {
+    if ((word->has_url && ansi_terminal_link_wrap(impl)) ||
+        (word->atom_count > 1 && ansi_sim_atom_kind(&word->atoms[0]) == ANSI_SIM_PREFIX)) {
         ansi_sim_style current_style;
         int opened_osc8;
 
@@ -1230,7 +1254,8 @@ static int ansi_sim_emit_atoms(mdf_impl *impl, mdf_sink *sink, const ansi_sim_wo
             impl->ansi_osc8_active = 1;
             impl->ansi_osc8_pending_reopen = 0;
         }
-        ansi_update_visible_output_state(impl, word->buf, word->len);
+        if (word->has_url) ansi_update_url_output_state(impl, word->buf, word->len);
+        else ansi_update_visible_output_state(impl, word->buf, word->len);
         *active_style = current_style;
         return 0;
     }
@@ -1341,14 +1366,18 @@ static int ansi_sim_flush_word(mdf_impl *impl, mdf_sink *sink, ansi_sim_word *wo
         impl->ansi_pending_space_plain = 0;
         if (ansi_write_word_byte(impl, sink, ' ') != 0) return -1;
     }
-    if (impl->opts.width > 0 && impl->ansi_col > 0 &&
+    if (impl->opts.width > 0 && impl->ansi_col > ansi_current_rendered_prefix_width(impl) &&
         impl->ansi_col + (int)word->cols > impl->opts.width) {
         if (!preserve_prefix_line) {
             if (ansi_sim_style_switch(impl, sink, active_style, &ansi_sim_empty_style) != 0) return -1;
             if (ansi_emit_newline(impl, sink) != 0) return -1;
         }
     }
-    if (impl->opts.width > 0 &&
+    if (word->has_url && ansi_terminal_link_wrap(impl)) {
+        /* One contiguous URI decision lets the terminal mark continuation
+         * rows as soft wraps, with no inserted newline or indentation. */
+        if (ansi_sim_emit_atoms(impl, sink, word, active_style) != 0) return -1;
+    } else if (impl->opts.width > 0 &&
         (word->cols > (size_t)impl->opts.width || force_plain_mixed_url_exact)) {
         if (preserve_prefix_line) {
             size_t emitted;
@@ -1511,7 +1540,7 @@ static int ansi_flush_pending_exact_fallback(mdf_impl *impl, mdf_sink *sink, cha
         impl->pending_fallback_url_len = 0;
         return 0;
     }
-    if (next_char == '.' &&
+    if (!ansi_terminal_link_wrap(impl) && next_char == '.' &&
         impl->opts.width > 0 &&
         fallback_cols >= (size_t)impl->opts.width) {
         size_t i;
@@ -1959,6 +1988,7 @@ static const char *ansi_heading_inline_suffix(mdf_impl *impl, const char *style)
 void ansi_reset_line_output_state(mdf_impl *impl)
 {
     impl->ansi_col = 0;
+    impl->ansi_soft_wrap_line = 0;
     impl->ansi_writing_left_margin = 0;
     impl->ansi_pending_left_margin = 1;
     impl->ansi_suppress_left_margin = 0;
@@ -2308,7 +2338,7 @@ int ansi_write_newline(mdf_impl *impl, mdf_sink *sink)
     return ansi_emit_plain_newline(impl, sink);
 }
 
-void ansi_update_visible_output_state(mdf_impl *impl, const char *src, size_t len)
+static void ansi_update_output_state(mdf_impl *impl, const char *src, size_t len, int terminal_wrap)
 {
     size_t i;
 
@@ -2321,6 +2351,13 @@ void ansi_update_visible_output_state(mdf_impl *impl, const char *src, size_t le
         if (adv == 0) {
             break;
         }
+        if (terminal_wrap && utf8_display_width(cp) > 0 &&
+            impl->ansi_col + (int)utf8_display_width(cp) > impl->opts.width) {
+            impl->ansi_col = 0;
+            impl->ansi_soft_wrap_line = 1;
+            impl->ansi_pending_left_margin = 0;
+            impl->ansi_line_has_space = 0;
+        }
         impl->ansi_col += (int)utf8_display_width(cp);
         if (cp == ' ') {
             impl->ansi_line_has_space = 1;
@@ -2330,7 +2367,18 @@ void ansi_update_visible_output_state(mdf_impl *impl, const char *src, size_t le
     }
 }
 
-int ansi_emit_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len)
+void ansi_update_visible_output_state(mdf_impl *impl, const char *src, size_t len)
+{
+    ansi_update_output_state(impl, src, len, ansi_terminal_link_wrap(impl) &&
+                            (impl->ansi_soft_wrap_line || ansi_word_is_url_like(src, len)));
+}
+
+static void ansi_update_url_output_state(mdf_impl *impl, const char *src, size_t len)
+{
+    ansi_update_output_state(impl, src, len, ansi_terminal_link_wrap(impl));
+}
+
+static int ansi_emit_visible_chunk_kind(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len, int is_url)
 {
     const char *reset;
     const char *quote_text;
@@ -2370,7 +2418,7 @@ int ansi_emit_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, siz
             return -1;
         }
         ansi_update_visible_output_state(impl, " ", 1);
-        return ansi_emit_visible_chunk(impl, sink, src + 1, len - 1);
+        return ansi_emit_visible_chunk_kind(impl, sink, src + 1, len - 1, is_url);
     }
     if (!impl->quote_text_open &&
         impl->heading_style_pending_prefix == 0 &&
@@ -2419,8 +2467,22 @@ int ansi_emit_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, siz
             return -1;
         }
     }
-    ansi_update_visible_output_state(impl, src, len);
+    if (is_url) {
+        ansi_update_url_output_state(impl, src, len);
+    } else {
+        ansi_update_visible_output_state(impl, src, len);
+    }
     return 0;
+}
+
+int ansi_emit_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len)
+{
+    return ansi_emit_visible_chunk_kind(impl, sink, src, len, 0);
+}
+
+static int ansi_emit_url_chunk(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len)
+{
+    return ansi_emit_visible_chunk_kind(impl, sink, src, len, 1);
 }
 
 int ansi_emit_styled_visible_chunk(mdf_impl *impl, mdf_sink *sink, const char *style, const char *src, size_t len)
@@ -2514,13 +2576,15 @@ static int ansi_emit_styled_word_reset_suffix(mdf_impl *impl, mdf_sink *sink, co
     size_t reset_len;
     const char *quote_text;
     size_t quote_text_len;
+    int url_suffix;
 
+    url_suffix = suffix_len > 0 && ansi_terminal_link_wrap(impl) && ansi_word_is_url_like(text, text_len);
     style_len = (style == NULL || !MDF_ANSI_STYLED(impl)) ? 0 : strlen(style);
     prefix_reset_len = (MDF_ANSI_STYLED(impl) && style_len > 0 && impl->quote_text_open) ? 4 : 0;
     reset_len = !MDF_ANSI_STYLED(impl) ? 0 : 4;
     quote_text = "";
     quote_text_len = 0;
-    if (suffix_len > 0 && suffix[0] != ' ' && reset_len > 0 && ansi_quote_text_active(impl)) {
+    if (!url_suffix && suffix_len > 0 && suffix[0] != ' ' && reset_len > 0 && ansi_quote_text_active(impl)) {
         quote_text = mdf_theme_quote_text(impl);
         quote_text_len = strlen(quote_text);
     }
@@ -2544,6 +2608,10 @@ static int ansi_emit_styled_word_reset_suffix(mdf_impl *impl, mdf_sink *sink, co
         mdf_impl_mark_oom(impl);
         return -1;
     }
+    if (url_suffix && mdf_emit_buffer_append(impl, suffix, suffix_len) != 0) {
+        mdf_impl_mark_oom(impl);
+        return -1;
+    }
     if (reset_len > 0) {
         if (mdf_emit_buffer_append(impl, "\033[0m", reset_len) != 0) {
             mdf_impl_mark_oom(impl);
@@ -2554,14 +2622,19 @@ static int ansi_emit_styled_word_reset_suffix(mdf_impl *impl, mdf_sink *sink, co
         mdf_impl_mark_oom(impl);
         return -1;
     }
-    if (mdf_emit_buffer_append(impl, suffix, suffix_len) != 0) {
+    if (!url_suffix && mdf_emit_buffer_append(impl, suffix, suffix_len) != 0) {
         mdf_impl_mark_oom(impl);
         return -1;
     }
     impl->quote_text_open = quote_text_len > 0;
     if (mdf_emit_buffer_commit(impl, sink) != 0) return -1;
-    ansi_update_visible_output_state(impl, text, text_len);
-    ansi_update_visible_output_state(impl, suffix, suffix_len);
+    if (url_suffix) {
+        ansi_update_url_output_state(impl, text, text_len);
+        ansi_update_url_output_state(impl, suffix, suffix_len);
+    } else {
+        ansi_update_visible_output_state(impl, text, text_len);
+        ansi_update_visible_output_state(impl, suffix, suffix_len);
+    }
     return 0;
 }
 
@@ -3254,7 +3327,9 @@ static int ansi_flush_word_reserved(mdf_impl *impl, mdf_sink *sink, size_t trail
         impl->ansi_pending_space = 0;
         impl->ansi_pending_space_no_split = 0;
         impl->ansi_pending_space_plain = 0;
-        can_split_after_space = 0;
+        can_split_after_space = ansi_terminal_link_wrap(impl) &&
+                                ansi_word_is_url_like(impl->ansi_word, impl->ansi_word_len) &&
+                                impl->ansi_col + 1 == ansi_current_rendered_prefix_width(impl);
         if (impl->opts.width > 0 && impl->ansi_col > 0 &&
             impl->ansi_col + 1 + (int)(impl->ansi_word_cols + trailing_reserve) > impl->opts.width &&
             !no_split_after_space &&
@@ -3315,7 +3390,9 @@ static int ansi_flush_word_reserved(mdf_impl *impl, mdf_sink *sink, size_t trail
         const char *emit_style;
         size_t total_word_cols;
 
-        if (impl->ansi_pending_final_emph_base_len > impl->ansi_word_len) {
+        /* Defer an emphasis reset until the complete URI has been emitted. */
+        if (impl->ansi_pending_final_emph_base_len > impl->ansi_word_len ||
+            (ansi_terminal_link_wrap(impl) && ansi_word_is_url_like(impl->ansi_word, impl->ansi_word_len))) {
             impl->ansi_pending_final_emph_base_len = impl->ansi_word_len;
             impl->ansi_pending_final_emph_base_cols = impl->ansi_word_cols;
         }
@@ -3372,6 +3449,12 @@ static int ansi_flush_word_reserved(mdf_impl *impl, mdf_sink *sink, size_t trail
             return -1;
         }
         impl->ansi_pending_style_reset = 1;
+    } else if (ansi_terminal_link_wrap(impl) &&
+               ansi_word_is_url_like(impl->ansi_word, impl->ansi_word_len)) {
+        if (ansi_emit_url_chunk(impl, sink, impl->ansi_word, impl->ansi_word_len) != 0) {
+            impl->ansi_flushing_word = 0;
+            return -1;
+        }
     } else if (preserve_prefix_line && impl->opts.width > 0 &&
         impl->ansi_col > 0 &&
         impl->ansi_col + (int)impl->ansi_word_cols > impl->opts.width) {
@@ -3642,9 +3725,10 @@ static int ansi_flush_pending_final_emph_word(mdf_impl *impl, mdf_sink *sink, ch
     if (next != '\0' && next != ' ' && next != '\n') {
         u = (unsigned char)next;
         /* Keep a closing parenthesis and its following sentence mark together. */
-        if (!isalnum(u) &&
-            ((next == ')' && impl->ansi_pending_final_emph_word_suffix) ||
-             !ansi_emphasis_suffix_trailing_only(&next, 1))) {
+        if ((ansi_terminal_link_wrap(impl) && ansi_word_is_url_like(impl->ansi_word, impl->ansi_word_len)) ||
+            (!isalnum(u) &&
+             ((next == ')' && impl->ansi_pending_final_emph_word_suffix) ||
+              !ansi_emphasis_suffix_trailing_only(&next, 1)))) {
             impl->ansi_pending_final_emph_suffix = 1;
             impl->ansi_pending_final_emph_word_suffix = 0;
             impl->ansi_pending_final_emph_base_len = impl->ansi_word_len;
@@ -3688,7 +3772,9 @@ static int ansi_flush_pending_final_emph_word(mdf_impl *impl, mdf_sink *sink, ch
     if (impl->ansi_pending_final_emph_suffix) {
         const char *emit_style;
 
-        if (impl->ansi_pending_final_emph_base_len > impl->ansi_word_len) {
+        /* Defer an emphasis reset until the complete URI has been emitted. */
+        if (impl->ansi_pending_final_emph_base_len > impl->ansi_word_len ||
+            (ansi_terminal_link_wrap(impl) && ansi_word_is_url_like(impl->ansi_word, impl->ansi_word_len))) {
             impl->ansi_pending_final_emph_base_len = impl->ansi_word_len;
             impl->ansi_pending_final_emph_base_cols = impl->ansi_word_cols;
         }
@@ -3908,6 +3994,8 @@ static int ansi_current_rendered_prefix_width(mdf_impl *impl)
 {
     int width;
     int quote_depth;
+
+    if (impl->ansi_soft_wrap_line) return 0;
 
     quote_depth = impl->quote_depth > 0 ? impl->quote_depth : (impl->quote_wrap_active ? 1 : 0);
     if (quote_depth > 0 && !impl->in_pre) {
@@ -4977,6 +5065,7 @@ static int ansi_capture_autolink_reflow(mdf_impl *impl, mdf_sink *sink,
     saved_pending_inline_style = impl->ansi_pending_inline_style;
     saved_active_inline_style = impl->ansi_active_inline_style;
     limit = ansi_content_limit(impl);
+    if (ansi_terminal_link_wrap(impl)) limit = 0;
     if (ansi_ensure_left_margin(impl, sink) != 0 ||
         mdf_emit_buffer_reset(impl) != 0 ||
         (MDF_ANSI_STYLED(impl) && mdf_emit_buffer_append_cstr(impl, mdf_theme_link_text(impl)) != 0) ||
@@ -6207,6 +6296,15 @@ static int ansi_emit_plain_url_link_label(mdf_impl *impl, mdf_sink *sink,
     if (text_len > 0 && ansi_ensure_left_margin(impl, sink) != 0) {
         return -1;
     }
+    if (ansi_terminal_link_wrap(impl)) {
+        ansi_sim_input input;
+
+        input.text = text;
+        input.len = text_len;
+        input.style = sim_style;
+        input.kind = ANSI_SIM_URL;
+        return ansi_sim_emit_inputs(impl, sink, &input, 1);
+    }
     off = 0;
     emitted_style = 0;
     while (off < text_len) {
@@ -6533,7 +6631,7 @@ static int ansi_emit_link_parts_ex(mdf_impl *impl, mdf_sink *sink,
             }
             if (mdf_emit_buffer_commit(impl, sink) != 0) return -1;
             ansi_update_visible_output_state(impl, "(", 1);
-            ansi_update_visible_output_state(impl, url, url_len);
+            ansi_update_url_output_state(impl, url, url_len);
             ansi_update_visible_output_state(impl, "))", 2);
             impl->pending_wrapped_link_outer_close = 1;
             return 0;
@@ -6598,7 +6696,7 @@ static int ansi_emit_link_parts_ex(mdf_impl *impl, mdf_sink *sink,
             }
             impl->ansi_pending_fallback_emit_valid = 1;
             ansi_update_visible_output_state(impl, "(", 1);
-            ansi_update_visible_output_state(impl, url, url_len);
+            ansi_update_url_output_state(impl, url, url_len);
             ansi_update_visible_output_state(impl, ")", 1);
             return 0;
         }
@@ -6640,7 +6738,7 @@ static int ansi_emit_link_parts_ex(mdf_impl *impl, mdf_sink *sink,
             }
             impl->ansi_pending_fallback_emit_valid = 1;
             ansi_update_visible_output_state(impl, "(", 1);
-            ansi_update_visible_output_state(impl, url, url_len);
+            ansi_update_url_output_state(impl, url, url_len);
             ansi_update_visible_output_state(impl, ")", 1);
             return 0;
         }
@@ -6672,7 +6770,7 @@ static int ansi_emit_link_parts_ex(mdf_impl *impl, mdf_sink *sink,
             }
             impl->ansi_pending_fallback_emit_valid = 1;
             ansi_update_visible_output_state(impl, "(", 1);
-            ansi_update_visible_output_state(impl, url, url_len);
+            ansi_update_url_output_state(impl, url, url_len);
             ansi_update_visible_output_state(impl, ")", 1);
             return 0;
         }
@@ -6765,7 +6863,7 @@ int ansi_emit_link_fallback_only(mdf_impl *impl, mdf_sink *sink, const char *url
         }
         impl->ansi_pending_fallback_emit_valid = 1;
         ansi_update_visible_output_state(impl, "(", 1);
-        ansi_update_visible_output_state(impl, url, url_len);
+        ansi_update_url_output_state(impl, url, url_len);
         ansi_update_visible_output_state(impl, outer_paren_context ? "))" : ")", outer_paren_context ? 2 : 1);
         if (outer_paren_context) {
             impl->pending_wrapped_link_outer_close = 1;
@@ -6819,6 +6917,7 @@ static int ansi_emit_autolink_text(mdf_impl *impl, mdf_sink *sink, const char *t
     limit = ansi_content_limit(impl);
     total_cols = visible_cols(text, text_len);
     is_email = autolink_is_email(text, text_len);
+    if (ansi_terminal_link_wrap(impl)) limit = 0;
     if (limit > 0) {
         if ((int)total_cols > limit) {
             start = url_visible_fit_start(text, text_len, limit);
@@ -6987,6 +7086,7 @@ static int ansi_inline_emit_link(mdf_impl *impl, mdf_sink *sink)
 static void ansi_capture_pending_state(mdf_impl *impl, mdf_ansi_pending_state *state)
 {
     state->col = impl->ansi_col;
+    state->soft_wrap_line = impl->ansi_soft_wrap_line;
     state->writing_left_margin = impl->ansi_writing_left_margin;
     state->left_margin = impl->ansi_pending_left_margin;
     state->suppress_left_margin = impl->ansi_suppress_left_margin;
@@ -7008,6 +7108,7 @@ static void ansi_capture_pending_state(mdf_impl *impl, mdf_ansi_pending_state *s
 static void ansi_restore_pending_state(mdf_impl *impl, const mdf_ansi_pending_state *state)
 {
     impl->ansi_col = state->col;
+    impl->ansi_soft_wrap_line = state->soft_wrap_line;
     impl->ansi_writing_left_margin = state->writing_left_margin;
     impl->ansi_pending_left_margin = state->left_margin;
     impl->ansi_suppress_left_margin = state->suppress_left_margin;
@@ -7037,6 +7138,7 @@ static int ansi_store_pending_inline_code(mdf_impl *impl,
     }
     impl->ansi_pending_code_valid = 1;
     impl->ansi_pending_code_col = state->col;
+    impl->ansi_pending_code_soft_wrap_line = state->soft_wrap_line;
     impl->ansi_pending_code_writing_left_margin = state->writing_left_margin;
     impl->ansi_pending_code_left_margin = state->left_margin;
     impl->ansi_pending_code_suppress_left_margin = state->suppress_left_margin;
@@ -7180,6 +7282,7 @@ int ansi_reflow_pending_code(mdf_impl *impl)
     }
 
     state.col = impl->ansi_pending_code_col;
+    state.soft_wrap_line = impl->ansi_pending_code_soft_wrap_line;
     state.writing_left_margin = impl->ansi_pending_code_writing_left_margin;
     state.left_margin = impl->ansi_pending_code_left_margin;
     state.suppress_left_margin = impl->ansi_pending_code_suppress_left_margin;
@@ -7255,6 +7358,7 @@ int ansi_reflow_pending_link(mdf_impl *impl)
          * separator merely to ask the normal pending-space path to wrap. */
         display_cols = visible_cols(impl->ansi_pending_link, link_len);
         limit = ansi_content_limit(impl);
+        if (ansi_terminal_link_wrap(impl)) limit = 0;
         if (limit > 0 && display_cols > (size_t)limit) {
             size_t fit_start;
 
@@ -7643,6 +7747,19 @@ static int ansi_inline_emit_pending_emphasis(mdf_impl *impl, mdf_sink *sink, siz
         if (ansi_flush_pending_space_only_for(impl, sink, first_word_cols) != 0) {
             return -1;
         }
+    }
+    if (ansi_terminal_link_wrap(impl) && !ansi_text_contains_space(text, text_len) &&
+        ansi_word_is_url_like(text, text_len)) {
+        if (ansi_emit_styled_word_reset_suffix(impl, sink, effective_prefix,
+                text, text_len, impl->ansi_word, impl->ansi_word_len) != 0) return -1;
+        impl->ansi_word_len = 0;
+        impl->ansi_word_cols = 0;
+        impl->ansi_pending_attached_style = NULL;
+        if (impl->heading_open) {
+            impl->heading_style_suspended = 1;
+        }
+        ansi_inline_clear_emphasis_state(impl);
+        return 0;
     }
     if (impl->heading_open && (impl->heading_style_suspended || impl->heading_style_pending_prefix) &&
         impl->ansi_col == (impl->quote_wrap_active ? 0 : impl->heading_level + 1)) {
@@ -10491,6 +10608,7 @@ static int ansi_chart_commit_line(mdf_impl *impl, mdf_sink *sink)
     if (mdf_emit_buffer_append_cstr(impl, "\n") != 0) return -1;
     if (mdf_emit_buffer_commit(impl, sink) != 0) return -1;
     impl->ansi_col = 0;
+    impl->ansi_soft_wrap_line = 0;
     impl->ansi_prev_char = '\n';
     return 0;
 }

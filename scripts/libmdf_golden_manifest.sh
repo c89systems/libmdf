@@ -112,6 +112,18 @@ printf '%s\n' '# name input args...'
 emit_fixture comprehensive testdata/deck-corpus/comprehensive.md
 emit_fixture mixed-layout tests/golden-fixtures/mixed-layout.md
 emit_fixture container-charts tests/golden-fixtures/container-charts.md
+# Long plain URLs: natural terminal continuation at zero right margin, plus
+# a positive-right-margin control. Every case also checks incremental decisions.
+for width in 30 80; do
+  for profile in 0:0 2:0 6:0 2:2; do
+    left=${profile%:*}
+    right=${profile#*:}
+    emit_case "terminal-wrapped-links.ansi.styled.w$width.margin-l$left-r$right" \
+      tests/golden-fixtures/terminal-wrapped-links.md --ansi -w "$width" --margin-left "$left" --margin-right "$right"
+    emit_case "terminal-wrapped-links.ansi.boring.w$width.margin-l$left-r$right" \
+      tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w "$width" --margin-left "$left" --margin-right "$right"
+  done
+done
 emit_url_wrap_fixture url-wrap-centaur testdata/centaur-post.md
 emit_url_wrap_fixture url-wrap-frontmatter2 testdata/frontmatter2.md
 emit_url_wrap_fixture url-wrap-linkify testdata/future/linkify.md 40 80 100 120

@@ -66,7 +66,7 @@ if(LIBMDF_ARTIFACT_SCOPE STREQUAL "complete")
   file(GLOB root_inputs CONFIGURE_DEPENDS LIST_DIRECTORIES false
     "${LIBMDF_SOURCE_DIR}/*" "${LIBMDF_SOURCE_DIR}/.[!.]*")
   list(FILTER root_inputs EXCLUDE REGEX "/\\.git$")
-  foreach(directory assets benchmarks cmake docs e2e examples fuzz include lua parityjudge scripts src testdata tests)
+  foreach(directory assets benchmarks cmake docs examples fuzz include lua parityjudge scripts src testdata tests)
     file(GLOB_RECURSE source_inputs CONFIGURE_DEPENDS LIST_DIRECTORIES false
       "${LIBMDF_SOURCE_DIR}/${directory}/*")
     list(APPEND scripts ${source_inputs})

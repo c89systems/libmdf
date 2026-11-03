@@ -376,9 +376,8 @@
     A longer link label that wraps
     across lines in narrow
     viewports
-    (https://example.com/docs/deck/
-    mod
-    e/long/link)
+    (https://example.com/docs/deck
+    /mode/long/link)
 
     Link activation should not
     accidentally advance the deck.
@@ -388,9 +387,8 @@
     # Image Syntax
 
     !Tiny transparent pixel
-    (data:image/gif;base64,R0lGODlh
-    AQA
-    BAAAAACw=)
+    (data:image/gif;base64,R0lGODl
+    hAQABAAAAACw=)
 
     This exercises Markdown image
     output without requiring

@@ -119,6 +119,22 @@ container-charts.deck.default tests/golden-fixtures/container-charts.md --deck
 container-charts.deck.w42 tests/golden-fixtures/container-charts.md --deck -w 42
 container-charts.deck.slide-numbers.fade tests/golden-fixtures/container-charts.md --deck --slide-numbers -x fade
 container-charts.deck.boring tests/golden-fixtures/container-charts.md --deck --boring
+terminal-wrapped-links.ansi.styled.w30.margin-l0-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 30 --margin-left 0 --margin-right 0
+terminal-wrapped-links.ansi.boring.w30.margin-l0-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 30 --margin-left 0 --margin-right 0
+terminal-wrapped-links.ansi.styled.w30.margin-l2-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 30 --margin-left 2 --margin-right 0
+terminal-wrapped-links.ansi.boring.w30.margin-l2-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 30 --margin-left 2 --margin-right 0
+terminal-wrapped-links.ansi.styled.w30.margin-l6-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 30 --margin-left 6 --margin-right 0
+terminal-wrapped-links.ansi.boring.w30.margin-l6-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 30 --margin-left 6 --margin-right 0
+terminal-wrapped-links.ansi.styled.w30.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 30 --margin-left 2 --margin-right 2
+terminal-wrapped-links.ansi.boring.w30.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 30 --margin-left 2 --margin-right 2
+terminal-wrapped-links.ansi.styled.w80.margin-l0-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 80 --margin-left 0 --margin-right 0
+terminal-wrapped-links.ansi.boring.w80.margin-l0-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 0 --margin-right 0
+terminal-wrapped-links.ansi.styled.w80.margin-l2-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 80 --margin-left 2 --margin-right 0
+terminal-wrapped-links.ansi.boring.w80.margin-l2-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 2 --margin-right 0
+terminal-wrapped-links.ansi.styled.w80.margin-l6-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 80 --margin-left 6 --margin-right 0
+terminal-wrapped-links.ansi.boring.w80.margin-l6-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 6 --margin-right 0
+terminal-wrapped-links.ansi.styled.w80.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 80 --margin-left 2 --margin-right 2
+terminal-wrapped-links.ansi.boring.w80.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 2 --margin-right 2
 url-wrap-centaur.ansi.styled.w20.margin-l0-r0 testdata/centaur-post.md --ansi -w 20 --margin-left 0 --margin-right 0
 url-wrap-centaur.ansi.styled.w40.margin-l10-r10 testdata/centaur-post.md --ansi -w 40 --margin-left 10 --margin-right 10
 url-wrap-centaur.ansi.boring.w20.margin-l0-r0 testdata/centaur-post.md --ansi --boring -w 20 --margin-left 0 --margin-right 0

@@ -133,11 +133,9 @@ include emphasis,
 strong text,
 combined emphasis,
 inline code, links
-(https://example.com
-/deck), and
+(https://example.com/deck), and
 autolinks like
-https://example.com/
-autolink.
+https://example.com/autolink.
 
 # Lists
 
@@ -156,9 +154,7 @@ autolink.
     item.
   - Nested item with
     a link
-    
-    (https://example
-    .com/nested).
+    (https://example.com/nested).
 
 1. Ordered item one.
 2. Ordered item two
@@ -554,16 +550,13 @@ disclosure.
 
 Primary
 documentation link
-(https://example.com
-/docs)
+(https://example.com/docs)
 
 A longer link label
 that wraps across
 lines in narrow
 viewports
-(https://example.com
-/docs/deck/mode/long
-/link)
+(https://example.com/docs/deck/mode/long/link)
 
 Link activation
 should not
@@ -577,9 +570,7 @@ only.
 
 !Tiny transparent
 pixel
-(data:image/gif;base
-64,R0lGODlhAQABAAAAA
-Cw=)
+(data:image/gif;base64,R0lGODlhAQABAAAAACw=)
 
 This exercises
 Markdown image

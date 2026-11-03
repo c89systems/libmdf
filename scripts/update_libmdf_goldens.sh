@@ -14,8 +14,8 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 mkdir -p "$TMP"
 
-if [ ! -x "$RENDER" ]; then
-  "$ROOT/scripts/build.sh" debug
+if [ -z "${LIBMDF_GOLDEN_RENDER:-}" ]; then
+  "$ROOT/scripts/build.sh" debug --target golden_render
 fi
 
 mkdir -p "$GOLDEN_DIR"
