@@ -809,7 +809,14 @@ mdf_status mdf_get_theme_palette(const mdf *self, mdf_theme_palette *out);
  * The same allocation-free, foreground-only rules as mdf_theme_get_palette apply.
  */
 mdf_status mdf_theme_heading_foreground(const char *name, int level, char *out, size_t out_size);
-/** Detect whether the current terminal is likely to support OSC8 links. */
+/**
+ * Estimate OSC8 support from environment hints without terminal I/O.
+ * OSC8=0 disables detection. Recognized terminal identifiers and VTE >= 5000
+ * enable support. Without specific TERM_PROGRAM or VTE_VERSION information,
+ * TERM=xterm or xterm-* is an optimistic compatibility fallback, including
+ * over SSH. This is a heuristic, not capability negotiation. The renderer's
+ * ANSI policy still controls whether escapes may reach its output sink.
+ */
 int mdf_detect_osc8_support(void);
 /** Return terminal width for fd, then COLUMNS, then a positive fallback. */
 int mdf_terminal_width(int fd, int fallback);

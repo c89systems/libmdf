@@ -555,6 +555,16 @@ from the actual cursor, including delayed wrapping at an exact right edge.
 A positive right margin retains hard URL wrapping. OSC8 remains optional and
 off by default in the library.
 
+`cmdf --osc8 auto` and `mdf_detect_osc8_support()` use environment hints.
+When specific terminal identifiers are absent, `TERM=xterm` and `xterm-*`
+(including `xterm-256color`) provide an optimistic compatibility fallback.
+This also works over SSH without forwarding `TERM_PROGRAM` or `VTE_VERSION`:
+[OpenSSH forwards TERM for terminal sessions by default](https://man.openbsd.org/ssh_config#SendEnv).
+Specific terminal information, including old VTE versions, retains precedence;
+`OSC8=0` disables automatic OSC8, and `--osc8 off` disables it explicitly.
+Detection performs no terminal I/O and is a heuristic rather than capability
+negotiation. ANSI destination policy still keeps ordinary pipes escape-free.
+
 Plain-text link detection also depends on the terminal and multiplexer. tmux
 pane redraws can prevent an outer terminal from joining a wrapped address even
 when libmdf emitted its bytes contiguously. Use `cmdf --osc8 on` for explicit

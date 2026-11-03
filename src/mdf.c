@@ -3725,11 +3725,15 @@ int mdf_detect_osc8_support(void)
     value = getenv("VTE_VERSION");
     if (value != NULL && *value != '\0') {
         vte = strtol(value, &end, 10);
-        if (end != value && *end == '\0' && vte >= 5000) {
-            return 1;
-        }
+        return end != value && *end == '\0' && vte >= 5000;
     }
-    return 0;
+    /* SSH normally forwards TERM without desktop terminal identifiers. Use
+     * xterm compatibility as a fallback, not as an override for specific
+     * terminal information (including a known old VTE). */
+    value = getenv("TERM_PROGRAM");
+    if (value != NULL && *value != '\0') return 0;
+    value = getenv("TERM");
+    return value != NULL && (strcmp(value, "xterm") == 0 || strncmp(value, "xterm-", 6) == 0);
 }
 
 int mdf_terminal_width(int fd, int fallback)

@@ -931,6 +931,132 @@ static void sink_oom_free(void *userdata, void *ptr, size_t size)
     free(ptr);
 }
 
+static int test_osc8_auto_detection(void)
+{
+    static const char *const names[] = {
+        "OSC8", "DOMTERM", "WT_SESSION", "TERM_PROGRAM", "TERM", "VTE_VERSION",
+        "SSH_TTY", "SSH_CONNECTION"
+    };
+    static const struct {
+        const char *term;
+        const char *program;
+        const char *vte;
+        const char *osc8;
+        int expected;
+    } cases[] = {
+        {"xterm-256color", NULL, NULL, NULL, 1},
+        {"xterm", NULL, NULL, NULL, 1},
+        {"xterm-direct", NULL, NULL, NULL, 1},
+        {"xterm-kitty", NULL, NULL, NULL, 1},
+        {"dumb", NULL, NULL, NULL, 0},
+        {"linux", NULL, NULL, NULL, 0},
+        {"unknown", NULL, NULL, NULL, 0},
+        {"not-xterm-256color", NULL, NULL, NULL, 0},
+        {"xtermish", NULL, NULL, NULL, 0},
+        {"", NULL, NULL, NULL, 0},
+        {NULL, NULL, NULL, NULL, 0},
+        {"xterm-256color", NULL, "4999", NULL, 0},
+        {"xterm-256color", NULL, "5000", NULL, 1},
+        {"xterm", NULL, "invalid", NULL, 0},
+        {"xterm-256color", "Apple_Terminal", NULL, NULL, 0},
+        {"xterm-256color", "WezTerm", NULL, NULL, 1},
+        {"unknown", "iTerm.app", NULL, NULL, 1},
+        {"unknown", NULL, "7000", NULL, 1},
+        {"xterm-256color", NULL, NULL, "0", 0},
+        {"xterm-256color", NULL, NULL, "", 1}
+    };
+    static const char markdown[] = "[Link](https://example.org)\n";
+    static const char opener[] = "\033]8;;https://example.org\033\\";
+    const char *values[4];
+    char *saved[sizeof(names) / sizeof(names[0])];
+    const char *value;
+    size_t i;
+    size_t j;
+    size_t k;
+    size_t offset;
+    int remote;
+    int detected;
+    int linked;
+    int fails;
+    mdf_options opts;
+    mdf *renderer;
+    mdf_status st;
+    mdf_sink sink;
+    emission_log writes;
+    emission_log traces;
+
+    fails = 0;
+    memset(saved, 0, sizeof(saved));
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        value = getenv(names[i]);
+        if (value != NULL) {
+            saved[i] = (char *)malloc(strlen(value) + 1);
+            if (saved[i] == NULL) {
+                for (j = 0; j < i; j++) free(saved[j]);
+                return expect(0, "OSC8 detection saves the environment");
+            }
+            strcpy(saved[i], value);
+        }
+    }
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+        fails += expect(unsetenv(names[i]) == 0, "OSC8 fixture clears inherited terminal hints");
+    for (remote = 0; remote < 2; remote++) {
+        fails += expect((remote ? setenv("SSH_TTY", "/dev/pts/1", 1) : unsetenv("SSH_TTY")) == 0,
+                        "OSC8 fixture selects local or SSH transport");
+        fails += expect((remote ? setenv("SSH_CONNECTION", "192.0.2.1 1 192.0.2.2 22", 1) : unsetenv("SSH_CONNECTION")) == 0,
+                        "OSC8 fixture selects local or SSH connection");
+        for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            values[0] = cases[i].term;
+            values[1] = cases[i].program;
+            values[2] = cases[i].vte;
+            values[3] = cases[i].osc8;
+            for (j = 0; j < 4; j++) {
+                const char *name;
+                name = j == 0 ? "TERM" : (j == 1 ? "TERM_PROGRAM" : (j == 2 ? "VTE_VERSION" : "OSC8"));
+                fails += expect((values[j] == NULL ? unsetenv(name) : setenv(name, values[j], 1)) == 0,
+                                "OSC8 fixture sets terminal information");
+            }
+            detected = mdf_detect_osc8_support();
+            if (detected != cases[i].expected)
+                fprintf(stderr, "OSC8 auto: case=%lu SSH=%d TERM=%s got=%d expected=%d\n",
+                        (unsigned long)i, remote, cases[i].term == NULL ? "(unset)" : cases[i].term,
+                        detected, cases[i].expected);
+            fails += expect(detected == cases[i].expected, "OSC8 auto recognizes terminal hints across transports");
+            if (i > 1) continue;
+            memset(&writes, 0, sizeof(writes));
+            memset(&traces, 0, sizeof(traces));
+            mdf_options_init(&opts);
+            opts.ansi_mode = MDF_ANSI_ON;
+            opts.osc8 = detected;
+            opts.write_trace.userdata = &traces;
+            opts.write_trace.emit = emission_log_trace;
+            sink.userdata = &writes;
+            sink.write = emission_log_write;
+            renderer = NULL;
+            st = mdf_create(MDF_FORMAT_ANSI, &opts, &renderer);
+            for (j = 0; st == MDF_OK && j < sizeof(markdown) - 1; j++)
+                st = mdf_feed(renderer, markdown + j, 1, &sink);
+            if (st == MDF_OK) st = mdf_finish_document(renderer, &sink);
+            fails += expect(st == MDF_OK, "auto-detected OSC8 renders fragmented input");
+            linked = 0;
+            for (k = 0; k < writes.count; k++)
+                for (offset = 0; offset + sizeof(opener) - 1 <= writes.lengths[k]; offset++)
+                    if (memcmp(writes.chunks[k] + offset, opener, sizeof(opener) - 1) == 0) linked = 1;
+            fails += expect(linked, "auto-detected xterm link reaches the real sink");
+            fails += expect(emission_logs_equal(&writes, &traces), "auto OSC8 sink writes and trace events match");
+            if (renderer != NULL) renderer->destroy(renderer);
+            emission_log_free(&writes);
+            emission_log_free(&traces);
+        }
+    }
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        fails += expect((saved[i] == NULL ? unsetenv(names[i]) : setenv(names[i], saved[i], 1)) == 0,
+                        "OSC8 detection restores the environment");
+        free(saved[i]);
+    }
+    return fails;
+}
+
 int main(void)
 {
     int fails;
@@ -970,6 +1096,7 @@ int main(void)
     static const unsigned char deck_font_bytes[] = {1, 2, 3};
 
     fails = test_html_font_weight_ranges();
+    fails += test_osc8_auto_detection();
     inst = NULL;
     out = NULL;
     memset(long_markdown, 'a', sizeof(long_markdown));

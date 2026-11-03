@@ -1,6 +1,27 @@
 local mdf = require("libmdf")
 assert(io.stdin:read("*a") == "", "Lua policy fixture supplies its own input; stdin must be EOF")
 local workflow, policy, destination, width = arg[1], arg[2], arg[3], tonumber(arg[4])
+if workflow == "osc8_auto" then
+  local writes, traces = {}, {}
+  local markdown = "[Link](https://example.org)\n"
+  local pos = 1
+  mdf.render_stream(function()
+    if pos > #markdown then return nil end
+    local chunk = markdown:sub(pos, pos)
+    pos = pos + 1
+    return chunk
+  end, function(chunk)
+    writes[#writes + 1] = chunk
+    assert(io.stdout:write(chunk))
+  end, {
+    output_fd = mdf.file_descriptor(io.stdout),
+    osc8 = mdf.detect_osc8_support(),
+    write_trace = function(_, chunk) traces[#traces + 1] = chunk end,
+  })
+  assert(#writes == #traces, "auto OSC8 sink/trace count mismatch")
+  for i = 1, #writes do assert(writes[i] == traces[i], "auto OSC8 sink/trace byte mismatch") end
+  return
+end
 local opts = { ansi_mode = policy, width = width, osc8 = true }
 if destination == "known" then opts.output_fd = mdf.file_descriptor(io.stdout) end
 local text = "µ界 " .. string.rep("alpha beta gamma delta ", 7) .. "\n"

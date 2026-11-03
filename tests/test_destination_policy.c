@@ -141,6 +141,66 @@ static size_t max_line(const char *out)
     return len > longest ? len : longest;
 }
 
+static void osc8_auto_contract(void)
+{
+    static const char *const hints[] = {"OSC8", "DOMTERM", "WT_SESSION", "TERM_PROGRAM", "VTE_VERSION"};
+    static const char *const terminals[] = {"xterm", "xterm-256color", "xterm-direct"};
+    const char *automatic[] = {"-8", "auto", NULL};
+    const char *enabled[] = {"-8", "on", NULL};
+    const char *disabled[] = {"-8", "off", NULL};
+    const char *ascii[] = {"--ascii", "-8", "auto", NULL};
+    const char *facade[] = {"osc8_auto", NULL};
+    const char *const *args;
+    char *actual;
+    char *forced;
+    size_t i;
+    int remote;
+
+    args = program == NULL ? automatic : facade;
+    for (i = 0; i < sizeof(hints) / sizeof(hints[0]); i++)
+        check(unsetenv(hints[i]) == 0, "clear inherited OSC8 hints");
+    for (remote = 0; remote < 2; remote++) {
+        check((remote ? setenv("SSH_TTY", "/dev/pts/1", 1) : unsetenv("SSH_TTY")) == 0,
+              "select local or SSH terminal");
+        check((remote ? setenv("SSH_CONNECTION", "192.0.2.1 1 192.0.2.2 22", 1) : unsetenv("SSH_CONNECTION")) == 0,
+              "select local or SSH connection");
+        for (i = 0; i < sizeof(terminals) / sizeof(terminals[0]); i++) {
+            check(setenv("TERM", terminals[i], 1) == 0, "select xterm-compatible terminal");
+            actual = run(args, 1, 1);
+            check(strstr(actual, "\033]8;;https://example.org\033\\") != NULL &&
+                  strstr(actual, "\033]8;;\033\\") != NULL, "OSC8 auto emits complete links with only TERM");
+            if (program == NULL) {
+                forced = run(enabled, 1, 1);
+                check(strcmp(actual, forced) == 0, "OSC8 auto matches explicit on in xterm-compatible terminals");
+                free(forced);
+                forced = run(disabled, 1, 1);
+                check(strstr(forced, "\033]8;;") == NULL, "explicit OSC8 off remains effective");
+                free(forced);
+                forced = run(ascii, 1, 1);
+                check(strchr(forced, '\033') == NULL, "ASCII suppresses automatically detected OSC8");
+                free(forced);
+            }
+            free(actual);
+            actual = run(args, 0, 1);
+            check(strchr(actual, '\033') == NULL, "auto OSC8 does not enable escapes in pipes");
+            free(actual);
+        }
+    }
+    check(setenv("OSC8", "0", 1) == 0, "disable OSC8 through the environment");
+    actual = run(args, 1, 1);
+    check(strstr(actual, "\033]8;;") == NULL, "OSC8=0 suppresses the TERM fallback");
+    free(actual);
+    check(unsetenv("OSC8") == 0 && setenv("VTE_VERSION", "4999", 1) == 0, "select old VTE");
+    actual = run(args, 1, 1);
+    check(strstr(actual, "\033]8;;") == NULL, "known old VTE suppresses the TERM fallback");
+    free(actual);
+    check(unsetenv("VTE_VERSION") == 0 && setenv("TERM", "dumb", 1) == 0, "select dumb terminal over SSH");
+    actual = run(args, 1, 1);
+    check(strstr(actual, "\033]8;;") == NULL, "SSH alone does not establish OSC8 support");
+    free(actual);
+    check(unsetenv("SSH_TTY") == 0 && unsetenv("SSH_CONNECTION") == 0, "clear SSH fixture");
+}
+
 static void cli_contract(void)
 {
     const char *none[] = {NULL};
@@ -245,7 +305,9 @@ int main(int argc, char **argv)
     }
     check(snprintf(scratch, sizeof(scratch), "%s/destination-policy.XXXXXX", argv[2]) < (int)sizeof(scratch), "scratch path");
     check(mkdtemp(scratch) != NULL, "scratch directory");
-    check(setenv("COLUMNS", "200", 1) == 0 && setenv("TERM_PROGRAM", "WezTerm", 1) == 0, "test environment");
+    check(setenv("COLUMNS", "200", 1) == 0, "test width environment");
+    osc8_auto_contract();
+    check(setenv("TERM_PROGRAM", "WezTerm", 1) == 0, "test terminal environment");
     if (program == NULL) cli_contract(); else lua_contract();
     check(snprintf(errors, sizeof(errors), "%s/stderr", scratch) < (int)sizeof(errors), "diagnostics path");
     unlink(errors); rmdir(scratch);

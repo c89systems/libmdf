@@ -249,6 +249,8 @@ function mdf.status_string(status)
 end
 
 ---Return whether the current terminal is likely to support OSC8 hyperlinks.
+---Uses environment hints and an xterm TERM fallback when specific terminal
+---identifiers are absent, including over SSH; never probes terminal input.
 ---@return boolean
 function mdf.detect_osc8_support()
   return core.detect_osc8_support()
