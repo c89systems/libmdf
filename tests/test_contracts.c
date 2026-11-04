@@ -6010,7 +6010,11 @@ static int test_escaped_markdown_contract(void)
         "(\\",
         "http:/\\",
         "(\\q)",
-        "http:/\\q"
+        "http:/\\q",
+        "**a*\\! b**",
+        "**a*\\? b**",
+        "**a*\\* b**",
+        "**a*\\q b**"
     };
     static const char *const outputs[] = {
         "**bold**\n",
@@ -6030,7 +6034,11 @@ static int test_escaped_markdown_contract(void)
         "(\\\n",
         "http:/\\\n",
         "(\\q)\n",
-        "http:/\\q\n"
+        "http:/\\q\n",
+        "a! b\n",
+        "a? b\n",
+        "a* b\n",
+        "a\\q b\n"
     };
     mdf_options opts;
     mdf *renderer;
@@ -6044,19 +6052,26 @@ static int test_escaped_markdown_contract(void)
     size_t length;
     size_t fragment;
     const char *expected;
+    char *plain;
     int method;
+    int path;
+    int styled;
     int fails;
 
     fails = 0;
     for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
-        for (method = 0; method < 6; method++) {
+        /* Whole and byte-fragmented source, feed and token input, in both
+         * ANSI modes. Validate visible text and the exact real write trace. */
+        for (method = 0; method < 12; method++) {
+            path = method % 6;
+            styled = method >= 6;
             mdf_options_init(&opts);
-            opts.ansi_mode = MDF_ANSI_OFF;
+            opts.ansi_mode = styled ? MDF_ANSI_ON : MDF_ANSI_OFF;
             opts.boring = 1;
             fragment = method % 2 == 0 ? 4096 : 1;
-            if (method < 2) {
+            if (path < 2) {
                 st = render_capture(MDF_FORMAT_ANSI, &opts, inputs[i], fragment, &cap);
-            } else if (method < 4) {
+            } else if (path < 4) {
                 st = incremental_capture(&opts, inputs[i], fragment, &cap);
             } else {
                 memset(&cap, 0, sizeof(cap));
@@ -6080,13 +6095,15 @@ static int test_escaped_markdown_contract(void)
                 if (st == MDF_OK) st = renderer->finish(renderer);
                 if (renderer != NULL) renderer->destroy(renderer);
             }
-            expected = i == 8 && method >= 4 ? "# heading\n> quote\n---\n" : outputs[i];
-            if (st != MDF_OK || cap.out == NULL || strcmp(cap.out, expected) != 0)
+            expected = i == 8 && path >= 4 ? "# heading\n> quote\n---\n" : outputs[i];
+            plain = cap.out == NULL ? NULL : strip_ansi(cap.out);
+            if (st != MDF_OK || plain == NULL || strcmp(plain, expected) != 0)
                 fprintf(stderr, "escape case=%lu method=%d output=%s\n", (unsigned long)i,
                         method, cap.out == NULL ? "(none)" : cap.out);
-            fails += expect(st == MDF_OK && cap.out != NULL && strcmp(cap.out, expected) == 0,
+            fails += expect(st == MDF_OK && plain != NULL && strcmp(plain, expected) == 0,
                             "escaped Markdown renders literally across parser and token fragments");
             fails += expect_trace_matches_writes(&cap, "escaped text sink writes match traces");
+            free(plain);
             capture_free(&cap);
         }
     }
@@ -6696,6 +6713,7 @@ int main(int argc, char **argv)
     fails = 0;
     if (contract_memory_checks) {
         fails += test_stream_trace_contract();
+        fails += test_escaped_markdown_contract();
         fails += test_literal_escape_api_contract();
         fails += test_literal_html_contract();
         fails += test_emphasis_escape_newline_contract();

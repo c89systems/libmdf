@@ -8994,6 +8994,7 @@ static int ansi_process_escaped_char(mdf_impl *impl, mdf_sink *sink, char c)
     }
     word = &impl->word;
     if (impl->inline_mode == 5) {
+        if (ansi_inline_flush_streamed_emphasis_closers(impl, sink) != 0) return -1;
         if (!(impl->inline_emph_nested_delim != 0 && impl->inline_emph_nested_count > 0) &&
             impl->inline_emph_streaming < 2) word = &impl->emph_word;
         rc = ansi_inline_emit_streamed_emphasis_literal_char(impl, sink, c);
@@ -9018,10 +9019,6 @@ static int ansi_process_text(mdf_impl *impl, mdf_sink *sink, const char *src, si
                 continue;
             }
             if (ansi_process_escaped_char(impl, sink, '\\') != 0) return -1;
-        }
-        if (c == '\\' && (impl->inline_mode == 0 || impl->inline_mode == 5)) {
-            impl->ansi_escape_pending = 1;
-            continue;
         }
         if (impl->ansi_link_tail_pending) {
             size_t quote_prefix_len;
@@ -9187,12 +9184,8 @@ reprocess_inline_char:
                     impl->ansi_active_inline_style = NULL;
                 }
             }
-            if (c == '\\' && i + 1 < len && mdf_markdown_escapable_char(src[i + 1])) {
-                c = src[++i];
-                if (ansi_write_visible_char(impl, sink, c) != 0) {
-                    return -1;
-                }
-                break;
+            if (c == '\\') {
+                impl->ansi_escape_pending = 1;
             } else if (c == '(') {
                 impl->inline_outer_paren_candidate = 1;
             } else if (c == '[') {
@@ -9547,10 +9540,11 @@ ansi_case5_reprocess:
                 if (ansi_inline_emit_streamed_emphasis_word(impl, sink, 0) != 0) return -1;
                 impl->inline_mode = 13;
                 impl->inline_url_len = 0;
-            } else if (c == '\\' && i + 1 < len && mdf_markdown_escapable_char(src[i + 1])) {
-                c = src[++i];
+            } else if (c == '\\') {
+                /* The closer/nesting decisions above precede the escape,
+                 * including when its literal byte arrives in another feed. */
                 if (ansi_inline_flush_streamed_emphasis_closers(impl, sink) != 0) return -1;
-                if (ansi_inline_emit_streamed_emphasis_literal_char(impl, sink, c) != 0) return -1;
+                impl->ansi_escape_pending = 1;
             } else if (c == '\n') {
                 if (ansi_inline_flush_streamed_emphasis_closers(impl, sink) != 0) return -1;
                 if (ansi_inline_emit_streamed_emphasis_char(impl, sink, ' ') != 0) return -1;
