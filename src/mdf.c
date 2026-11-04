@@ -2913,6 +2913,8 @@ static mdf_status mdf_incremental_fail(mdf *renderer, mdf_status st)
             mdf_set_error(renderer, "incremental rendering failed");
         }
     }
+    mdf_word_clear(&impl->word);
+    mdf_word_clear(&impl->emph_word);
     impl->incremental_state = MDF_INCREMENTAL_FAILED;
     return st;
 }

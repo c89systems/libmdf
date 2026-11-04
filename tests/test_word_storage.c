@@ -662,6 +662,65 @@ static int renderer_source_failure(int emphasis)
     return fails;
 }
 
+static int incremental_parser_failure(int emphasis)
+{
+    render_capture *c;
+    mdf *r;
+    mdf_impl *impl;
+    mdf_sink sink;
+    mdf_status st;
+    char *input;
+    size_t length;
+    size_t writes;
+    FILE *file;
+    int fd;
+    int fails;
+
+    c = (render_capture *)calloc(1, sizeof(*c));
+    input = (char *)malloc(70001);
+    if (c == NULL || input == NULL) { free(c); free(input); return 1; }
+    r = render_create(c, &sink, 80, 0, 1, 0, 0);
+    if (r == NULL) { free(c); free(input); return 1; }
+    impl = (mdf_impl *)r->impl;
+    fails = 0;
+    length = emphasis ? 5002 : 5000;
+    memset(input, 'x', length);
+    if (emphasis) memcpy(input, "**", 2);
+    input[length++] = '\n';
+    st = r->feed(r, input, length);
+    file = emphasis ? impl->emph_word.file : impl->word.file;
+    fails += check(st == MDF_OK && file != NULL && c->xs == 0,
+                   "incremental failure fixture retains an undecided plain or emphasis spool");
+    fd = file == NULL ? -1 : fileno(file);
+    writes = c->writes;
+    fails += check(r->feed(r, NULL, 0) == MDF_ERROR_INVALID && fd >= 0 &&
+                   fcntl(fd, F_GETFD) >= 0 && c->writes == writes,
+                   "a recoverable invalid feed leaves undecided storage and output intact");
+    length = 70000;
+    memset(input, 'h', length);
+    input[0] = '|';
+    st = r->feed(r, input, length);
+    fails += check(st == MDF_ERROR_PARSE && impl->word_error == MDF_OK &&
+                   strstr(r->error(r), "retention limit") != NULL,
+                   "incremental parser failure preserves its parse status and retention diagnostic");
+    errno = 0;
+    fails += check(fd >= 0 && fcntl(fd, F_GETFD) == -1 && errno == EBADF &&
+                   impl->word.file == NULL && impl->emph_word.file == NULL,
+                   "terminal incremental parse failure closes pending spools before returning");
+    fails += check(c->writes == writes && c->xs == 0 && !c->bad && c->writes == c->traces,
+                   "parser failure emits no undecided word and preserves sink/trace identity");
+    fails += check(r->feed(r, "retry", 5) == MDF_ERROR_INVALID &&
+                   r->flush(r) == MDF_ERROR_INVALID && r->finish_document(r) == MDF_ERROR_INVALID &&
+                   c->writes == writes, "a failed incremental document rejects retries without output");
+    fails += check(r->reset(r) == MDF_OK && r->feed(r, "recovered\n", 10) == MDF_OK &&
+                   r->finish_document(r) == MDF_OK && !c->bad && c->writes == c->traces,
+                   "reset recovers from an incremental parser failure with matching sink writes and traces");
+    r->destroy(r);
+    free(input);
+    free(c);
+    return fails;
+}
+
 static int osc8_suffix_read_failure(void)
 {
     static const char input[] = "[abcdefghijklmnop](https://x)))))))))))))))))))))))))))))))))";
@@ -806,6 +865,8 @@ static void *worker(void *unused)
     fails += renderer_file_failure();
     fails += renderer_source_failure(0);
     fails += renderer_source_failure(1);
+    fails += incremental_parser_failure(0);
+    fails += incremental_parser_failure(1);
     for (i = 0; i < 4; i++) fails += renderer_bounds(0, (int)i);
     fails += renderer_bounds(1, 0);
     fails += renderer_bounds(0, 4);
