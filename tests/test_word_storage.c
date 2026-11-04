@@ -662,6 +662,134 @@ static int renderer_source_failure(int emphasis)
     return fails;
 }
 
+static int osc8_suffix_read_failure(void)
+{
+    static const char input[] = "[abcdefghijklmnop](https://x)))))))))))))))))))))))))))))))))";
+    mdf_options opts;
+    render_capture *c;
+    mdf *r;
+    mdf_impl *impl;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    int fails;
+
+    c = (render_capture *)calloc(1, sizeof(*c));
+    if (c == NULL) return 1;
+    fails = 0;
+    mdf_options_init(&opts);
+    opts.ansi_mode = MDF_ANSI_ON;
+    opts.osc8 = 1;
+    opts.width = 8;
+    opts.write_trace.userdata = c;
+    opts.write_trace.emit = render_trace;
+    sink.userdata = c;
+    sink.write = render_write;
+    r = NULL;
+    st = mdf_create(MDF_FORMAT_ANSI, &opts, &r);
+    if (st == MDF_OK) st = r->set_sink(r, &sink);
+    if (st == MDF_OK) st = r->set_word_buffer(r, 7, 0);
+    memset(&token, 0, sizeof(token));
+    token.type = MDF_TOKEN_TEXT;
+    token.text = input;
+    token.len = sizeof(input) - 1;
+    if (st == MDF_OK) st = r->write_token(r, &token);
+    impl = r == NULL ? NULL : (mdf_impl *)r->impl;
+    fails += check(st == MDF_OK && impl != NULL && impl->word.file != NULL && impl->ansi_link_tail_pending,
+                   "OSC8 suffix fixture retains an overflowing file-backed punctuation tail");
+    if (st == MDF_OK && impl != NULL && impl->word.file != NULL) {
+        fails += check(close(fileno(impl->word.file)) == 0, "OSC8 fixture invalidates its spool descriptor");
+        impl->word.cache_len = 0;
+        /* A failed decode must return, rather than spinning in the suffix scan.
+         * Bound the regression itself even if that zero-progress bug returns. */
+        alarm(5);
+        st = r->finish(r);
+        alarm(0);
+        fails += check(st == MDF_ERROR_IO && strstr(r->error(r), "temporary file") != NULL &&
+                       impl->word.file == NULL && impl->emph_word.file == NULL,
+                       "OSC8 suffix decode failure reports I/O error and releases pending spools");
+        fails += check(!c->bad && !c->nul_output && c->writes == c->traces,
+                       "failed OSC8 suffix replay preserves real sink/trace identity");
+        fails += check(r->reset(r) == MDF_OK && r->write_literal(r, "next ", 5) == MDF_OK &&
+                       r->finish(r) == MDF_OK, "reset recovers after a failed OSC8 suffix replay");
+        fails += check(!c->bad && c->writes == c->traces,
+                       "OSC8 failure recovery keeps sink writes and traces identical");
+    }
+    if (r != NULL) r->destroy(r);
+    free(c);
+    return fails;
+}
+
+static int nested_replay_styles(int token_input)
+{
+    static const size_t limits[] = {65536, 4096, 7};
+    render_capture *c;
+    mdf *r;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    char *input;
+    char *reference;
+    size_t reference_len;
+    size_t length;
+    size_t offset;
+    size_t count;
+    size_t l;
+    int fragmented;
+    int styled;
+    int fails;
+
+    c = (render_capture *)calloc(1, sizeof(*c));
+    input = (char *)malloc(5100);
+    if (c == NULL || input == NULL) { free(c); free(input); return 1; }
+    strcpy(input, "a*** ****12:");
+    length = strlen(input);
+    memset(input + length, '3', 5000);
+    strcpy(input + length + 5000, " x");
+    length = strlen(input);
+    fails = 0;
+    for (styled = memory_checks ? 1 : 0; styled <= 1; styled++) {
+        for (fragmented = 0; fragmented <= (memory_checks ? 0 : 1); fragmented++) {
+            reference = NULL;
+            reference_len = 0;
+            for (l = 0; l < sizeof(limits) / sizeof(limits[0]); l++) {
+                memset(c, 0, sizeof(*c));
+                c->output = (char *)malloc(1);
+                c->cap = 1;
+                r = render_create(c, &sink, 80, 0, styled, limits[l], 0);
+                if (r == NULL || c->output == NULL) { fails++; free(c->output); if (r != NULL) r->destroy(r); break; }
+                st = r->set_geometry(r, 80, 0, 0);
+                memset(&token, 0, sizeof(token));
+                token.type = MDF_TOKEN_TEXT;
+                for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                    count = fragmented ? 1 : length;
+                    token.text = input + offset;
+                    token.len = count;
+                    st = token_input ? r->write_token(r, &token) : r->feed(r, token.text, token.len);
+                }
+                if (st == MDF_OK) st = token_input ? r->finish(r) : r->finish_document(r);
+                fails += check(st == MDF_OK && !c->bad && c->writes == c->traces,
+                               "nested replay emits identical sink writes and traces");
+                if (l == 0) { reference = c->output; reference_len = c->len; }
+                else {
+                    if (c->len != reference_len || memcmp(c->output, reference, reference_len) != 0)
+                        fprintf(stderr, "nested style mismatch limit=%lu styled=%d fragmented=%d token_input=%d\n",
+                                (unsigned long)limits[l], styled, fragmented, token_input);
+                    fails += check(c->len == reference_len && memcmp(c->output, reference, reference_len) == 0,
+                                   "spooling preserves enclosing nested emphasis for following text");
+                    free(c->output);
+                }
+                free(c->cuts);
+                r->destroy(r);
+            }
+            free(reference);
+        }
+    }
+    free(input);
+    free(c);
+    return fails;
+}
+
 static void *worker(void *unused)
 {
     static const size_t limits[] = {1, 7, MDF_WORD_MEMORY_DEFAULT, MDF_WORD_MEMORY_MAX};
@@ -670,6 +798,9 @@ static void *worker(void *unused)
 
     (void)unused;
     fails = configure();
+    fails += nested_replay_styles(0);
+    fails += nested_replay_styles(1);
+    fails += osc8_suffix_read_failure();
     if (!memory_checks) fails += compare_layout();
     fails += reader_and_failures();
     fails += renderer_file_failure();

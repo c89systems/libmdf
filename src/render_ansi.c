@@ -2564,6 +2564,7 @@ static int ansi_emit_visible_source(mdf_impl *impl, mdf_sink *sink, mdf_text_vie
     size_t quote_text_len;
     int first;
     int direct;
+    int has_style_transition;
     const char *src;
     size_t len;
 
@@ -2618,10 +2619,10 @@ static int ansi_emit_visible_source(mdf_impl *impl, mdf_sink *sink, mdf_text_vie
         quote_text = mdf_theme_quote_text(impl);
         quote_text_len = strlen(quote_text);
     }
-    if ((impl->heading_style_pending_prefix && MDF_ANSI_STYLED(impl)) ||
-        (impl->ansi_pending_inline_style != NULL && MDF_ANSI_STYLED(impl)) ||
-        reset_len > 0 ||
-        quote_text_len > 0 || !direct) {
+    has_style_transition = (impl->heading_style_pending_prefix && MDF_ANSI_STYLED(impl)) ||
+                           (impl->ansi_pending_inline_style != NULL && MDF_ANSI_STYLED(impl)) ||
+                           reset_len > 0 || quote_text_len > 0;
+    if (has_style_transition || !direct) {
         const char *style;
         const char *inline_style;
         size_t style_len;
@@ -2640,14 +2641,18 @@ static int ansi_emit_visible_source(mdf_impl *impl, mdf_sink *sink, mdf_text_vie
             mdf_impl_mark_oom(impl);
             return -1;
         }
-        impl->heading_style_pending_prefix = 0;
-        impl->ansi_pending_inline_style = NULL;
-        if (inline_style_len > 0) {
-            impl->ansi_active_inline_style = inline_style;
+        /* Reading a spool needs the emission buffer even for plain bytes.
+         * That storage detail must not consume a pending enclosing style. */
+        if (has_style_transition) {
+            impl->heading_style_pending_prefix = 0;
+            impl->ansi_pending_inline_style = NULL;
+            if (inline_style_len > 0) {
+                impl->ansi_active_inline_style = inline_style;
+            }
+            impl->ansi_pending_style_reset = 0;
+            impl->ansi_pending_attached_style = NULL;
+            impl->quote_text_open = quote_text_len > 0;
         }
-        impl->ansi_pending_style_reset = 0;
-        impl->ansi_pending_attached_style = NULL;
-        impl->quote_text_open = quote_text_len > 0;
         if (mdf_emit_buffer_commit(impl, sink) != 0) return -1;
     } else {
         if (mdf_emit_all(impl, sink, src, len) != 0) {
@@ -5904,6 +5909,7 @@ static int ansi_flush_link_word(mdf_impl *impl, mdf_sink *sink, int final)
             size_t adv;
 
             adv = ansi_source_decode(impl, mdf_text_word(&impl->word), quote_off, &cp);
+            if (adv == 0) return -1;
             if (ansi_is_quote_codepoint(cp)) quoted_suffix = 1;
             quote_off += adv;
         }
