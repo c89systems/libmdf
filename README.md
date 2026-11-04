@@ -1249,8 +1249,13 @@ discovery for implementations and public headers with the workstation's clangd.
 Public headers have their own C89 compile commands. The editor check includes
 the Lua implementation only when `LIBMDF_BUILD_LUA_TESTS` is enabled.
 
-Toolchain files and runtime discovery never provision tools. Prepare them explicitly
-with `make tools-native` or `make tools-cross`. Linux uses the pinned complete
+`make build` prepares the pinned x86_64 musl toolchain before configuring its
+static CLI, reusing the collection when already available. `make tools-native`
+explicitly prepares both native GNU and musl collections plus AFL++; use
+`make tools-cross` for the complete declared target matrix.
+Toolchain files and runtime discovery never provision tools. Direct CMake and
+other build entrypoints require their selected tools to be prepared first.
+Linux uses the pinned complete
 Bootlin collections; Darwin cross builds use the prepared osxcross SDK and pinned
 host MIG helper. `CPKT_TOOLCHAIN_CACHE` and `CPKT_DEPENDENCY_CACHE` overrides use
 this checkout's owned `build/` or `.cache/` paths, or the declared global cpkt cache

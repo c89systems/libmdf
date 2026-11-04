@@ -397,6 +397,8 @@ if(LIBMDF_BUILD_TESTS)
   add_test(NAME cmake_option_matrix COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmake_options.sh)
   add_test(NAME cmdf_install_boundary COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmdf_install.sh)
   set_tests_properties(cmdf_install_boundary PROPERTIES LABELS "unit;packaging" TIMEOUT 90)
+  add_test(NAME static_build_entrypoint COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_static_build.sh)
+  set_tests_properties(static_build_entrypoint PROPERTIES LABELS "unit;lifecycle" TIMEOUT 15)
   set_tests_properties(cmake_option_matrix PROPERTIES
     LABELS "unit;packaging"
     TIMEOUT 60

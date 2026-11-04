@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+"$root/scripts/cpkt-toolchains.sh" ensure x86_64-linux-musl
 "$root/scripts/build.sh" x86_64-linux-musl-release --target cmdf
 binary="$root/build/x86_64-linux-musl-release/cmdf"
 readelf=$("$root/scripts/discover_target_tools.sh" --target x86_64-linux-musl --preset x86_64-linux-musl-release readelf)

@@ -9,7 +9,7 @@ export CMAKE_BUILD_PARALLEL_LEVEL
 help:
 	@printf '%s\n' \
 	  'libmdf native lifecycle (all operations are serialized):' \
-	  '  make tools-native            Explicitly prepare pinned GNU/AFL++ tooling' \
+	  '  make tools-native            Explicitly prepare pinned GNU/musl/AFL++ tooling' \
 	  '  make tools-cross             Explicitly prepare the declared target tools' \
 	  '  make build                   Build the static native musl CLI' \
 	  '  make build-debug             Build native tests, Go parity tools and Lua facade' \
@@ -41,6 +41,7 @@ help:
 
 tools-native:
 	@scripts/cpkt-toolchains.sh ensure x86_64-linux-gnu
+	@scripts/cpkt-toolchains.sh ensure x86_64-linux-musl
 	@scripts/cpkt-aflpp.sh ensure
 
 tools-cross:
