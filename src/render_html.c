@@ -2924,11 +2924,11 @@ static int html_should_flush_ansi_word_after_text(const mdf_impl *impl, const md
            impl->inline_text_len == 0 &&
            impl->inline_url_len == 0 &&
            impl->inline_code_len == 0 &&
-           impl->inline_emph_len == 0 &&
+           impl->emph_word.len == 0 &&
            impl->inline_entity_len == 0 &&
            impl->pending_fallback_url_len == 0 &&
            !impl->pending_fallback_exact &&
-           impl->ansi_word_len > 0;
+           impl->word.len > 0;
 }
 
 static int html_pending_line_is_quote_prefix_only(const html_state *state)

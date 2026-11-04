@@ -4198,7 +4198,7 @@ static int test_ansi_nested_emphasis_edge_contract(void)
     st = render_capture(MDF_FORMAT_ANSI, &opts, "_*(_\\*__ ]\n", 64, &cap);
     fails += expect(st == MDF_OK && cap.failed == 0, "ansi malformed nested close render succeeds");
     fails += expect_trace_matches_writes(&cap, "ansi malformed nested close writes match traces");
-    fails += expect_contains(cap.out, "*(__", "ansi malformed nested close preserves visible content");
+    fails += expect_output_equals(&cap, "*(*]\n", "ansi malformed nested close matches whole-token escape decisions");
     capture_free(&cap);
 
     mdf_options_init(&opts);
@@ -5989,6 +5989,244 @@ static int test_runtime_geometry_next_document_contract(void)
     return fails;
 }
 
+static int test_escaped_markdown_contract(void)
+{
+    static const char *const inputs[] = {
+        "\\*\\*bold\\*\\*\n",
+        "\\&amp; \\<x\\> \\\\ end\n",
+        "prefix \\[x\\]\\(y\\) \\`code\\` \\_em\\_\n",
+        "\\\\*em*\n",
+        "*a \\*b\\* c*\n",
+        "\\",
+        "\\q\n",
+        "\\\\\n",
+        "\\# heading\n\\> quote\n\\-\\-\\-\n",
+        "_*(_\\*__ ]\n",
+        "**\\[x\\](y)**\n",
+        "**\\<https://example.com\\>**\n"
+    };
+    static const char *const outputs[] = {
+        "**bold**\n",
+        "&amp; <x> \\ end\n",
+        "prefix [x](y) `code` _em_\n",
+        "\\em\n",
+        "a *b* c\n",
+        "\\\n",
+        "\\q\n",
+        "\\\n",
+        "# heading > quote ---\n",
+        "*(*]\n",
+        "[x](y)\n",
+        "<https://example.com>\n"
+    };
+    mdf_options opts;
+    mdf *renderer;
+    mdf_token token;
+    mdf_sink sink;
+    mdf_status st;
+    capture cap;
+    size_t i;
+    size_t offset;
+    size_t count;
+    size_t length;
+    size_t fragment;
+    const char *expected;
+    int method;
+    int fails;
+
+    fails = 0;
+    for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        for (method = 0; method < 6; method++) {
+            mdf_options_init(&opts);
+            opts.ansi_mode = MDF_ANSI_OFF;
+            opts.boring = 1;
+            fragment = method % 2 == 0 ? 4096 : 1;
+            if (method < 2) {
+                st = render_capture(MDF_FORMAT_ANSI, &opts, inputs[i], fragment, &cap);
+            } else if (method < 4) {
+                st = incremental_capture(&opts, inputs[i], fragment, &cap);
+            } else {
+                memset(&cap, 0, sizeof(cap));
+                opts.write_trace.userdata = &cap;
+                opts.write_trace.emit = capture_trace;
+                sink.userdata = &cap;
+                sink.write = capture_write;
+                renderer = NULL;
+                st = mdf_create(MDF_FORMAT_ANSI, &opts, &renderer);
+                if (st == MDF_OK) st = renderer->set_sink(renderer, &sink);
+                length = strlen(inputs[i]);
+                memset(&token, 0, sizeof(token));
+                token.type = MDF_TOKEN_TEXT;
+                for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                    count = length - offset;
+                    if (count > fragment) count = fragment;
+                    token.text = inputs[i] + offset;
+                    token.len = count;
+                    st = renderer->write_token(renderer, &token);
+                }
+                if (st == MDF_OK) st = renderer->finish(renderer);
+                if (renderer != NULL) renderer->destroy(renderer);
+            }
+            expected = i == 8 && method >= 4 ? "# heading\n> quote\n---\n" : outputs[i];
+            if (st != MDF_OK || cap.out == NULL || strcmp(cap.out, expected) != 0)
+                fprintf(stderr, "escape case=%lu method=%d output=%s\n", (unsigned long)i,
+                        method, cap.out == NULL ? "(none)" : cap.out);
+            fails += expect(st == MDF_OK && cap.out != NULL && strcmp(cap.out, expected) == 0,
+                            "escaped Markdown renders literally across parser and token fragments");
+            fails += expect_trace_matches_writes(&cap, "escaped text sink writes match traces");
+            capture_free(&cap);
+        }
+    }
+    return fails;
+}
+
+static mdf_status literal_quote_capture(mdf_options *opts, const char *input, int method,
+                                         size_t fragment, capture *cap)
+{
+    mdf *renderer;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    char *escaped;
+    const char *text;
+    size_t length;
+    size_t offset;
+    size_t count;
+
+    renderer = NULL;
+    escaped = NULL;
+    memset(cap, 0, sizeof(*cap));
+    opts->write_trace.userdata = cap;
+    opts->write_trace.emit = capture_trace;
+    sink.userdata = cap;
+    sink.write = capture_write;
+    st = mdf_create(MDF_FORMAT_ANSI, opts, &renderer);
+    if (st == MDF_OK) st = renderer->set_sink(renderer, &sink);
+    if (st == MDF_OK && method == 0) st = renderer->escape_markdown(renderer, input, &escaped);
+    memset(&token, 0, sizeof(token));
+    token.type = MDF_TOKEN_BLOCKQUOTE_START;
+    if (st == MDF_OK) st = renderer->write_token(renderer, &token);
+    text = escaped == NULL ? input : escaped;
+    length = strlen(text);
+    for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+        count = length - offset;
+        if (count > fragment) count = fragment;
+        if (method == 1) st = renderer->write_literal(renderer, text + offset, count);
+        else if (method == 2) st = mdf_write_literal(renderer, text + offset, count, &sink);
+        else {
+            token.type = method == 0 ? MDF_TOKEN_TEXT : MDF_TOKEN_LITERAL_TEXT;
+            token.text = text + offset;
+            token.len = count;
+            st = renderer->write_token(renderer, &token);
+        }
+    }
+    token.type = MDF_TOKEN_BLOCKQUOTE_END;
+    token.text = NULL;
+    token.len = 0;
+    if (st == MDF_OK) st = renderer->write_token(renderer, &token);
+    if (st == MDF_OK) st = renderer->finish(renderer);
+    if (renderer != NULL) {
+        if (escaped != NULL) renderer->string_free(renderer, escaped);
+        renderer->destroy(renderer);
+    }
+    return st;
+}
+
+static int test_literal_escape_api_contract(void)
+{
+    static const char input[] = "**bold** _em_ `code` [x](url) &amp; <b> \302\265\347\225\214 \\";
+    static const int widths[] = {12, 80};
+    mdf_options opts;
+    mdf *renderer;
+    mdf_sink sink;
+    mdf_token token;
+    capture baseline;
+    capture cap;
+    mdf_status st;
+    char *escaped;
+    size_t before;
+    size_t w;
+    int mode;
+    int method;
+    int margin;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 2; mode++) {
+        for (w = 0; w < sizeof(widths) / sizeof(widths[0]); w++) {
+            for (margin = 0; margin < 2; margin++) {
+                mdf_options_init(&opts);
+                opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+                opts.theme_name = mode == 0 ? "default" : "one-dark";
+                opts.width = widths[w];
+                opts.margin_left = margin * 2;
+                opts.margin_right = margin * 2;
+                st = literal_quote_capture(&opts, input, 0, 4096, &baseline);
+                fails += expect(st == MDF_OK, "escaped Markdown quote baseline renders");
+                fails += expect_trace_matches_writes(&baseline, "escaped quote sink writes match traces");
+                for (method = 1; method <= 3; method++) {
+                    st = literal_quote_capture(&opts, input, method, 1, &cap);
+                    fails += expect(st == MDF_OK && cap.out != NULL && baseline.out != NULL &&
+                                    strcmp(cap.out, baseline.out) == 0,
+                                    "literal methods preserve quote layout, themes, Unicode and punctuation");
+                    fails += expect_trace_matches_writes(&cap, "literal quote writes match traces");
+                    fails += expect_capture_writes_equal(&cap, &baseline,
+                                                         "literal and escaped word decisions have identical writes");
+                    capture_free(&cap);
+                }
+                capture_free(&baseline);
+            }
+        }
+    }
+    memset(&cap, 0, sizeof(cap));
+    mdf_options_init(&opts);
+    opts.ansi_mode = MDF_ANSI_OFF;
+    opts.write_trace.userdata = &cap;
+    opts.write_trace.emit = capture_trace;
+    sink.userdata = &cap;
+    sink.write = capture_write;
+    renderer = NULL;
+    st = mdf_create(MDF_FORMAT_ANSI, &opts, &renderer);
+    if (st != MDF_OK) return fails + 1;
+    fails += expect(renderer->set_sink(renderer, &sink) == MDF_OK, "literal fixture binds its sink");
+    fails += expect(renderer->write_literal(renderer, "**bo", 4) == MDF_OK && cap.write_count == 0,
+                    "literal fragments retain an undecided word");
+    before = cap.write_count;
+    escaped = NULL;
+    fails += expect(renderer->escape_markdown(renderer, "**bold**", &escaped) == MDF_OK &&
+                    escaped != NULL && strcmp(escaped, "\\*\\*bold\\*\\*") == 0,
+                    "escape helper escapes each Markdown delimiter");
+    fails += expect(cap.write_count == before, "escape helper does not emit or flush pending text");
+    renderer->string_free(renderer, escaped);
+    fails += expect(renderer->write_literal(renderer, NULL, 0) == MDF_OK && cap.write_count == before,
+                    "empty literal writes are no-ops");
+    fails += expect(renderer->write_literal(renderer, NULL, 1) == MDF_ERROR_INVALID &&
+                    cap.write_count == before, "missing literal bytes fail before emission");
+    fails += expect(renderer->write_literal(renderer, "ld** tail", 9) == MDF_OK &&
+                    cap.out != NULL && strcmp(cap.out, "**bold**") == 0,
+                    "literal output emits a decided word and retains the next tail");
+    fails += expect(renderer->finish(renderer) == MDF_OK,
+                    "literal finish emits the pending word through normal EOF layout");
+    fails += expect_output_equals(&cap, "**bold** tail\n", "literal output retains syntax characters");
+    fails += expect_trace_matches_writes(&cap, "literal progressive decisions match sink writes");
+    capture_free(&cap);
+    memset(&cap, 0, sizeof(cap));
+    memset(&token, 0, sizeof(token));
+    token.type = MDF_TOKEN_TEXT;
+    token.text = "`pending";
+    token.len = 8;
+    fails += expect(renderer->write_token(renderer, &token) == MDF_OK, "literal guard fixture opens inline syntax");
+    before = cap.write_count;
+    fails += expect(renderer->write_literal(renderer, "x", 1) == MDF_ERROR_INVALID &&
+                    cap.write_count == before, "literal mode cannot force an unresolved Markdown decision");
+    fails += expect(renderer->reset(renderer) == MDF_OK &&
+                    renderer->write_literal(renderer, "next ", 5) == MDF_OK && renderer->finish(renderer) == MDF_OK,
+                    "literal input works after reset");
+    renderer->destroy(renderer);
+    capture_free(&cap);
+    return fails;
+}
+
 static int test_unicode_width_stream_contract(void)
 {
     static const char *const inputs[] = {
@@ -6030,6 +6268,151 @@ static int test_unicode_width_stream_contract(void)
     return fails;
 }
 
+static int test_escape_allocator_contract(void)
+{
+    static const char punctuation[] = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+    failing_allocator allocator;
+    mdf_options opts;
+    mdf *r;
+    char *escaped;
+    char *rendered;
+    size_t live;
+    size_t i;
+    mdf_status st;
+    int fails;
+
+    fails = 0;
+    memset(&allocator, 0, sizeof(allocator));
+    mdf_options_init(&opts);
+    opts.ansi_mode = MDF_ANSI_OFF;
+    opts.allocator.userdata = &allocator;
+    opts.allocator.alloc = failing_alloc;
+    opts.allocator.free = failing_free;
+    r = NULL;
+    st = mdf_create(MDF_FORMAT_ANSI, &opts, &r);
+    if (st != MDF_OK) return 1;
+    live = allocator.live;
+    allocator.fail_at = allocator.calls + 1;
+    escaped = (char *)1;
+    fails += expect(mdf_escape_markdown(r, punctuation, &escaped) == MDF_ERROR_NOMEM &&
+                    escaped == NULL && allocator.live == live,
+                    "escape result allocation failure clears output and preserves caller ownership");
+    allocator.fail_at = 0;
+    rendered = NULL;
+    st = r->escape_markdown(r, punctuation, &escaped);
+    fails += expect(st == MDF_OK && strlen(escaped) == 2 * strlen(punctuation),
+                    "escape helper handles every ASCII punctuation character");
+    if (st == MDF_OK) {
+        for (i = 0; i < strlen(punctuation); i++)
+            fails += expect(escaped[2 * i] == '\\' && escaped[2 * i + 1] == punctuation[i],
+                            "escape helper retains each punctuation byte after its escape");
+        st = r->render_cstr(r, escaped, &rendered);
+        fails += expect(st == MDF_OK && strncmp(rendered, punctuation, strlen(punctuation)) == 0 &&
+                        strcmp(rendered + strlen(punctuation), "\n") == 0,
+                        "escaped ASCII punctuation renders as its original ordinary text");
+    }
+    r->string_free(r, escaped);
+    r->string_free(r, rendered);
+    r->destroy(r);
+    fails += expect(allocator.live == 0, "escape results use the configured string allocator and release cleanly");
+    return fails;
+}
+
+static int test_literal_html_contract(void)
+{
+    static const char text[] = "**bold** <b> &amp; `code` [x](https://example.com)";
+    mdf_options opts;
+    mdf *r;
+    mdf_sink sink;
+    capture cap;
+    char *escaped;
+    char *html;
+    mdf_status st;
+    size_t i;
+    int fails;
+
+    fails = 0;
+    memset(&cap, 0, sizeof(cap));
+    mdf_options_init(&opts);
+    opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+    sink.userdata = &cap;
+    sink.write = capture_write;
+    r = NULL;
+    escaped = NULL;
+    html = NULL;
+    st = mdf_create(MDF_FORMAT_HTML, &opts, &r);
+    if (st == MDF_OK) st = mdf_set_html_title(r, "Literal");
+    if (st == MDF_OK) st = r->set_sink(r, &sink);
+    for (i = 0; st == MDF_OK && i < sizeof(text) - 1; i++) st = r->write_literal(r, text + i, 1);
+    if (st == MDF_OK) st = r->finish(r);
+    fails += expect(st == MDF_OK, "HTML supports fragmented literal input");
+    fails += expect_contains(cap.out, "**bold**", "HTML retains literal emphasis markers");
+    fails += expect_contains(cap.out, "&lt;b&gt;", "HTML encodes literal angle brackets");
+    fails += expect_contains(cap.out, "&amp;amp;", "HTML does not interpret a literal entity");
+    fails += expect_not_contains(cap.out, "href=\"https://example.com\"", "literal link syntax never becomes an HTML hyperlink");
+    if (st == MDF_OK) st = r->escape_markdown(r, text, &escaped);
+    if (st == MDF_OK) st = r->render_cstr(r, escaped, &html);
+    fails += expect(st == MDF_OK && html != NULL, "escaped Markdown also renders in HTML");
+    fails += expect_contains(html, "**bold**", "HTML source parsing honors escaped emphasis");
+    fails += expect_contains(html, "&amp;amp;", "HTML source parsing honors an escaped entity marker");
+    if (r != NULL) {
+        r->string_free(r, escaped);
+        r->string_free(r, html);
+        r->destroy(r);
+    }
+    capture_free(&cap);
+    return fails;
+}
+
+static int test_spooled_literal_html_contract(void)
+{
+    static const size_t limits[] = {65536, 4096, 7};
+    mdf_options opts;
+    mdf *r;
+    mdf_sink sink;
+    capture current;
+    char *reference;
+    char input[240];
+    size_t i;
+    size_t j;
+    size_t reference_len;
+    mdf_status st;
+    int fails;
+
+    fails = 0;
+    reference = NULL;
+    reference_len = 0;
+    for (i = 0; i < sizeof(input); i += 4) memcpy(input + i, "Zz0_", 4);
+    for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        memset(&current, 0, sizeof(current));
+        mdf_options_init(&opts);
+        opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+        opts.emission_buffer.max_cap = 16384;
+        sink.userdata = &current;
+        sink.write = capture_write;
+        r = NULL;
+        st = mdf_create(MDF_FORMAT_HTML, &opts, &r);
+        if (st == MDF_OK) st = mdf_set_html_title(r, "Literal");
+        if (st == MDF_OK) st = r->set_sink(r, &sink);
+        if (st == MDF_OK) st = r->set_word_buffer(r, limits[i], 0);
+        for (j = 0; st == MDF_OK && j < 50; j++) st = r->write_literal(r, input, sizeof(input));
+        if (st == MDF_OK) st = r->finish(r);
+        fails += expect(st == MDF_OK && current.out != NULL, "long literal words replay through the HTML renderer");
+        if (i == 0 && current.out != NULL) {
+            reference = dup_bytes(current.out, current.out_len);
+            reference_len = current.out_len;
+        } else {
+            fails += expect(current.out_len == reference_len && reference != NULL &&
+                            memcmp(current.out, reference, reference_len) == 0,
+                            "file-backed HTML literal output is identical to memory-backed output");
+        }
+        if (r != NULL) r->destroy(r);
+        capture_free(&current);
+    }
+    free(reference);
+    return fails;
+}
+
 int main(int argc, char **argv)
 {
     int fails;
@@ -6042,6 +6425,11 @@ int main(int argc, char **argv)
     }
     fails = 0;
     fails += test_stream_trace_contract();
+    fails += test_escaped_markdown_contract();
+    fails += test_literal_escape_api_contract();
+    fails += test_literal_html_contract();
+    fails += test_spooled_literal_html_contract();
+    fails += test_escape_allocator_contract();
     fails += test_unicode_width_stream_contract();
     fails += test_margin_contract();
     fails += test_table_contract();

@@ -288,6 +288,61 @@ Important options:
 - `allocator`, `emission_buffer`, `memory`: custom memory and emission-buffer
   control.
 
+## Literal text and escaping
+
+`renderer->write_literal(renderer, data, len)` bypasses Markdown syntax while
+using the manual-token renderer's word boundaries, wrapping, margins, quotes
+and theme. It also accepts `MDF_TOKEN_LITERAL_TEXT` through `write_token`.
+Bind a sink first; use ordinary structural tokens to open and close quotes or
+headings, then `finish` for EOF. Successive fragments may form one word:
+
+```c
+renderer->write_literal(renderer, "**bo", 4);  /* no word decision yet */
+renderer->write_literal(renderer, "ld** ", 5); /* emits literal **bold** */
+renderer->finish(renderer);
+```
+
+Literal fragments cannot interrupt unresolved inline Markdown syntax. They
+leave punctuation, backslashes, entities and link syntax visible. Newlines use
+the normal NEWLINE-token layout. The free function `mdf_write_literal` takes an
+explicit sink. Both ANSI and HTML output support this API.
+
+To produce Markdown for a later render instead, use
+`renderer->escape_markdown(renderer, text, &escaped)`, then release the result
+with `renderer->string_free`. It backslash-escapes ASCII punctuation, including
+existing backslashes: `**bold**` becomes `\*\*bold\*\*`. UTF-8 and whitespace
+are copied unchanged; Markdown indentation, line-break and paragraph layout
+rules still apply. This helper allocates its complete result and does not
+render, flush or change pending input.
+
+Lua exposes `mdf.escape_markdown(text)`, `handle:escape_markdown(text)`, and
+`handle:write_literal(fragment)` with the same behavior.
+
+An undecided ordinary or emphasis word retains up to **4 KiB in memory** by
+default. Larger words use an automatically deleted temporary file containing
+at most **1 MiB**. Filling either limit never forces a rendering decision.
+Once a real boundary or EOF resolves the word, file-backed input replays through
+bounded reads and normal decision emissions, preserving wrapping and styles.
+After the file cap is reached, further bytes of that word are discarded.
+Temporary-file creation or I/O failure returns `MDF_ERROR_IO`.
+
+Configure an idle renderer with
+`renderer->set_word_buffer(renderer, memory_bytes, disable_spooling)`:
+zero selects 4096 bytes, and the largest accepted memory limit is 65536 bytes.
+With spooling disabled, a word retains only its memory-limit prefix and drops
+excess bytes until its normal boundary. For example:
+
+```c
+renderer->set_word_buffer(renderer, 8192, 0); /* spool beyond 8 KiB */
+renderer->set_word_buffer(renderer, 4096, 1); /* truncate beyond 4 KiB */
+```
+
+Lua handles and document streams provide `:set_word_buffer(bytes, disabled)`.
+Files close on word completion, reset, rendering failure and destruction.
+These are pending-word limits; inline syntax decisions, table modes and the
+per-instance emission buffer retain their separate contracts. A fixed emission
+buffer must still fit each individual decision emission.
+
 ## Incremental documents
 
 For an event-loop or another producer that supplies Markdown fragments, keep
@@ -362,7 +417,7 @@ parser state; escape-free renderers discard state without terminal cleanup.
 Reset and sink replacement are rejected while a synchronous `render` call is
 active. A source callback may change geometry for later output. Sink and trace
 callbacks cannot change geometry, reset, or move a live render to a different
-sink. libmdf never retains input for replay. If terminal cleanup on the old
+sink. libmdf does not retain completed document input for reflow. If terminal cleanup on the old
 sink fails during replacement, the renderer still discards state and binds the
 new sink; replay remains the caller's responsibility.
 

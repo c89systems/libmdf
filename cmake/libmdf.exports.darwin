@@ -23,6 +23,7 @@ _mdf_set_geometry
 _mdf_set_html_title
 _mdf_set_sink
 _mdf_set_width
+_mdf_set_word_buffer
 _mdf_status_string
 _mdf_terminal_width
 _mdf_theme_count
@@ -31,3 +32,5 @@ _mdf_theme_get_palette
 _mdf_theme_heading_foreground
 _mdf_theme_name
 _mdf_write_token
+_mdf_write_literal
+_mdf_escape_markdown

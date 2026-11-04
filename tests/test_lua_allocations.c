@@ -86,6 +86,12 @@ int main(int argc, char **argv)
         "write_trace=function() count=count+1;if count==n then arm() end end})", NULL);
     run("handle-result", START "handle=m.new({width=1200});arm();handle:render(data)",
         "assert(type(handle:render('healthy'))=='string');handle:close();handle:close()");
+    run("escape-result", START "arm();m.escape_markdown(data)", NULL);
+    run("handle-escape-result", START "handle=m.new({width=1200});arm();handle:escape_markdown(data)",
+        "assert(type(handle:escape_markdown('**healthy**'))=='string');handle:close()");
+    run("literal-sink-copy", START "local text=data..' ';handle=m.new({width=1200});"
+        "handle:set_sink(function() return true end);arm();handle:write_literal(text)",
+        "handle:reset();handle:close()");
     run("handle-sink", START "handle=m.new({width=1200});handle:set_sink(function() return true end);"
         "local once=false;handle:render_stream(" READER ")", "handle:reset();handle:close()");
     run("document-sink", START "handle=m.document_stream({width=1200},function() return true end);"

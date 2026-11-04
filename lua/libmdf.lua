@@ -58,6 +58,9 @@ local mdf = {}
 ---@field reset fun(self: libmdf.Handle): boolean Closes enabled ANSI state and discards current parsing state; off policy emits no cleanup.
 ---@field set_html_title fun(self: libmdf.Handle, title: string|nil): boolean Sets an HTML/deck title before output begins.
 ---@field write_token fun(self: libmdf.Handle, token: libmdf.Token): boolean Streams one manual token to the bound sink.
+---@field write_literal fun(self: libmdf.Handle, text: string): boolean Writes literal fragments with normal word decisions, wrapping and quote layout; no Markdown interpretation or forced tail emission.
+---@field escape_markdown fun(self: libmdf.Handle, text: string): string Escapes syntax without rendering; retains Markdown whitespace/layout rules.
+---@field set_word_buffer fun(self: libmdf.Handle, bytes: integer, disable_spooling?: boolean): boolean Configures pending words: zero means 4096, maximum 65536; enabled spools retain at most one MiB.
 ---@field finish fun(self: libmdf.Handle): boolean Finishes manual-token rendering.
 ---@field feed fun(self: libmdf.Handle, chunk: string): boolean Feeds one nonempty incremental fragment.
 ---@field flush fun(self: libmdf.Handle): boolean Validates a non-EOF boundary without emitting or forcing an unfinished table.
@@ -68,6 +71,7 @@ local mdf = {}
 ---@field destroy fun(self: libmdf.Handle) Alias for `close`.
 
 ---@class libmdf.DocumentStream
+---@field set_word_buffer fun(self: libmdf.DocumentStream, bytes: integer, disable_spooling?: boolean): boolean Configures pending words before input: zero means 4096, maximum 65536; enabled spools retain at most one MiB.
 ---@field write fun(self: libmdf.DocumentStream, chunk: string): boolean Feeds one nonempty incremental fragment.
 ---@field flush fun(self: libmdf.DocumentStream): boolean Validates a non-EOF boundary without emitting or forcing an unfinished table.
 ---@field finish_document fun(self: libmdf.DocumentStream): boolean Applies EOF exactly once.
@@ -122,6 +126,15 @@ end
 ---@return string
 function mdf.render(markdown, opts)
   return core.render(markdown or "", opts or {})
+end
+
+---Return a materialized string with Markdown punctuation backslash-escaped.
+---Preserves UTF-8 and Markdown whitespace/layout rules. For direct literal
+---rendering, use a handle's write_literal method instead.
+---@param text string
+---@return string
+function mdf.escape_markdown(text)
+  return core.escape_markdown(text or "")
 end
 
 ---Stream through explicit per-call reader and writer callbacks without binding

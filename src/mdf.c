@@ -55,6 +55,7 @@ static void mdf_impl_clear_auto_html_title(mdf_impl *impl)
 
 static void mdf_impl_reset_render_state(mdf_impl *impl)
 {
+    impl->word_error = MDF_OK;
     memset(&impl->plain_tokens, 0, sizeof(impl->plain_tokens));
     impl->plain_token_input_len = 0;
     mdf_impl_clear_auto_html_title(impl);
@@ -62,9 +63,10 @@ static void mdf_impl_reset_render_state(mdf_impl *impl)
     MDF_ZERO_IMPL_SPAN(impl, in_paragraph, html_footer_needs_newline);
     MDF_ZERO_IMPL_SPAN(impl, quote_open, heading_style_pending_prefix);
     MDF_ZERO_IMPL_SPAN(impl, pending_breaks, ansi_prev_char);
-    impl->ansi_word_len = 0;
+    mdf_word_clear(&impl->word);
     impl->ansi_word_cols = 0;
     impl->ansi_flushing_word = 0;
+    impl->ansi_escape_pending = 0;
     impl->pre_code_len = 0;
     MDF_ZERO_IMPL_SPAN(impl, pre_code_prefix_state, pre_code_wrap_indent);
     MDF_ZERO_IMPL_SPAN(impl, table_cell_mode, inline_mode);
@@ -95,7 +97,7 @@ static void mdf_impl_reset_render_state(mdf_impl *impl)
     impl->ansi_link_tail_redundant_style_len = 0;
     impl->ansi_link_tail_last_char = '\0';
     impl->ansi_link_tail_pending = 0;
-    impl->inline_emph_len = 0;
+    mdf_word_clear(&impl->emph_word);
     MDF_ZERO_IMPL_SPAN(impl, inline_emph_count, inline_emph_after_word);
     impl->inline_emph_parenthesized = 0;
     impl->inline_emph_streaming = 0;
@@ -2192,6 +2194,8 @@ static mdf_status instance_render(mdf_renderer *self, mdf_source *source, mdf_si
     }
     parser->destroy(parser);
     deck_string_dispose(&title_source_data.prefix);
+    if (impl->word_error != MDF_OK)
+        st = mdf_renderer_fail_from_impl(self, impl, "word storage failed");
     impl->render_active = 0;
     return st;
 }
@@ -2400,6 +2404,7 @@ static void mdf_parser_bind_methods(mdf_parser *parser)
 }
 
 static mdf_status mdf_method_write_token(mdf *self, const mdf_token *token);
+static mdf_status mdf_method_write_literal(mdf *self, const char *data, size_t len);
 static mdf_status mdf_method_finish(mdf *self);
 static mdf_status mdf_method_render(mdf *self, mdf_source *source);
 static mdf_status mdf_method_feed(mdf *self, const char *data, size_t len);
@@ -2434,6 +2439,9 @@ static void mdf_bind_receiver_methods(mdf *inst)
     inst->get_theme_palette = mdf_get_theme_palette;
     inst->pager_file = mdf_method_pager_file;
     inst->pager_source = mdf_method_pager_source;
+    inst->set_word_buffer = mdf_set_word_buffer;
+    inst->write_literal = mdf_method_write_literal;
+    inst->escape_markdown = mdf_escape_markdown;
 }
 
 static mdf_status mdf_impl_configure_emit_buffer(mdf_impl *impl)
@@ -2507,9 +2515,9 @@ static void mdf_impl_release_heap_state(mdf_impl *impl)
                  impl->ansi_pending_emit_offsets_cap * sizeof(impl->ansi_pending_emit_offsets[0]));
     mdf_free_mem(allocator, impl->ansi_pending_code, impl->ansi_pending_code_cap);
     mdf_free_mem(allocator, impl->ansi_pending_link, impl->ansi_pending_link_cap);
-    mdf_free_mem(allocator, impl->inline_emph, impl->inline_emph_cap);
+    mdf_word_destroy(impl, &impl->emph_word);
     mdf_free_mem(allocator, impl->inline_entity, impl->inline_entity_cap);
-    mdf_free_mem(allocator, impl->ansi_word, impl->ansi_word_cap);
+    mdf_word_destroy(impl, &impl->word);
     mdf_free_mem(allocator, impl->pre_code_buf, impl->pre_code_cap);
     mdf_free_mem(allocator, impl->html_title, impl->html_title_cap);
     mdf_free_mem(allocator, impl->html_font_regular_uri, impl->html_font_regular_uri_cap);
@@ -2533,6 +2541,51 @@ static mdf_allocator mdf_string_allocator(const mdf *self)
     memset(&allocator, 0, sizeof(allocator));
     mdf_allocator_normalize(&allocator);
     return allocator;
+}
+
+int mdf_markdown_escapable_char(char c)
+{
+    return (c >= '!' && c <= '/') || (c >= ':' && c <= '@') ||
+           (c >= '[' && c <= '`') || (c >= '{' && c <= '~');
+}
+
+mdf_status mdf_escape_markdown(mdf *renderer, const char *text, char **out)
+{
+    mdf_allocator allocator;
+    size_t length;
+    size_t i;
+    size_t offset;
+    size_t needed;
+    char *escaped;
+
+    if (out != NULL) *out = NULL;
+    if (renderer == NULL || renderer->impl == NULL || text == NULL || out == NULL) {
+        mdf_set_error(renderer, "escape_markdown requires renderer, text, and out");
+        return MDF_ERROR_INVALID;
+    }
+    length = strlen(text);
+    needed = length;
+    for (i = 0; i < length; i++) {
+        if (mdf_markdown_escapable_char(text[i])) {
+            if (needed == (size_t)-1) return MDF_ERROR_NOMEM;
+            needed++;
+        }
+    }
+    if (needed == (size_t)-1) return MDF_ERROR_NOMEM;
+    allocator = mdf_string_allocator(renderer);
+    escaped = (char *)mdf_alloc(&allocator, needed + 1);
+    if (escaped == NULL) {
+        mdf_set_error(renderer, "out of memory");
+        return MDF_ERROR_NOMEM;
+    }
+    offset = 0;
+    for (i = 0; i < length; i++) {
+        if (mdf_markdown_escapable_char(text[i])) escaped[offset++] = '\\';
+        escaped[offset++] = text[i];
+    }
+    escaped[offset] = '\0';
+    *out = escaped;
+    return MDF_OK;
 }
 
 static void mdf_options_resolve(const mdf_options *opts, mdf_options *resolved)
@@ -2727,6 +2780,7 @@ mdf_status mdf_create(mdf_format format, const mdf_options *opts, mdf **out)
         return st;
     }
     impl->format = format;
+    impl->word_memory_limit = MDF_WORD_MEMORY_DEFAULT;
     impl->theme_name_explicit = theme_name_explicit;
     impl->user_allocator = defaults.allocator;
     mdf_memory_init(&impl->memory, &impl->user_allocator, &defaults.memory);
@@ -2827,6 +2881,8 @@ static mdf_status mdf_incremental_fail(mdf *renderer, mdf_status st)
     int copied_error;
 
     impl = (mdf_impl *)renderer->impl;
+    if (impl->word_error != MDF_OK)
+        st = mdf_renderer_fail_from_impl(renderer, impl, "word storage failed");
     copied_error = 0;
     if (impl->incremental_parser != NULL) {
         err = mdf_parser_error(impl->incremental_parser);
@@ -3017,6 +3073,31 @@ static void mdf_parser_set_width(mdf_parser *parser, int width)
     }
     parser_impl = (mdf_parser_impl *)parser->impl;
     parser_impl->opts.width = width;
+}
+
+mdf_status mdf_set_word_buffer(mdf *renderer, size_t memory_limit, int disable_spooling)
+{
+    mdf_impl *impl;
+
+    if (renderer == NULL || renderer->impl == NULL) return MDF_ERROR_INVALID;
+    impl = (mdf_impl *)renderer->impl;
+    if (memory_limit == 0) memory_limit = MDF_WORD_BUFFER_DEFAULT_BYTES;
+    if (memory_limit > MDF_WORD_BUFFER_MAX_BYTES) {
+        mdf_set_error(renderer, "word buffer cannot exceed 65536 bytes");
+        return MDF_ERROR_INVALID;
+    }
+    if (impl->format == MDF_FORMAT_HTML_DECK || impl->render_active ||
+        impl->incremental_state == MDF_INCREMENTAL_FAILED || impl->word.len != 0 ||
+        impl->emph_word.len != 0 || impl->inline_mode != 0 || impl->inline_emph_pending ||
+        impl->ansi_escape_pending) {
+        mdf_set_error(renderer, "word buffer configuration requires an idle inline renderer");
+        return MDF_ERROR_INVALID;
+    }
+    mdf_word_destroy(impl, &impl->word);
+    mdf_word_destroy(impl, &impl->emph_word);
+    impl->word_memory_limit = memory_limit;
+    impl->disable_word_spooling = disable_spooling != 0;
+    return MDF_OK;
 }
 
 mdf_status mdf_set_geometry(mdf *renderer, int width, int margin_left, int margin_right)
@@ -3286,6 +3367,17 @@ mdf_status mdf_write_token(mdf *renderer, const mdf_token *token, mdf_sink *sink
     return st;
 }
 
+mdf_status mdf_write_literal(mdf *renderer, const char *data, size_t len, mdf_sink *sink)
+{
+    mdf_token token;
+
+    memset(&token, 0, sizeof(token));
+    token.type = MDF_TOKEN_LITERAL_TEXT;
+    token.text = data;
+    token.len = len;
+    return mdf_write_token(renderer, &token, sink);
+}
+
 mdf_status mdf_finish(mdf *renderer, mdf_sink *sink)
 {
     mdf_impl *impl;
@@ -3325,6 +3417,14 @@ static mdf_status mdf_method_write_token(mdf *self, const mdf_token *token)
     return sink == NULL ? MDF_ERROR_INVALID : mdf_write_token(self, token, sink);
 }
 
+static mdf_status mdf_method_write_literal(mdf *self, const char *data, size_t len)
+{
+    mdf_sink *sink;
+
+    sink = mdf_receiver_sink(self);
+    return sink == NULL ? MDF_ERROR_INVALID : mdf_write_literal(self, data, len, sink);
+}
+
 static mdf_status mdf_method_finish(mdf *self)
 {
     mdf_sink *sink;
@@ -3358,7 +3458,7 @@ static mdf_status mdf_method_page(mdf *self, const char *name, mdf_source *sourc
     if (!mdf_renderer_is_builtin(self)) return MDF_ERROR_INVALID;
     impl = (mdf_impl *)self->impl;
     if (impl->format != MDF_FORMAT_ANSI || impl->render_active ||
-        impl->incremental_state != MDF_INCREMENTAL_IDLE || impl->in_paragraph || impl->in_pre || impl->ansi_word_len > 0) {
+        impl->incremental_state != MDF_INCREMENTAL_IDLE || impl->in_paragraph || impl->in_pre || impl->word.len > 0) {
         mdf_set_error(self, "pager requires an idle ANSI receiver");
         return MDF_ERROR_INVALID;
     }
@@ -3847,6 +3947,7 @@ int mdf_emit_all(mdf_impl *impl, mdf_sink *sink, const char *src, size_t len)
     if (impl == NULL) {
         return mdf_write_all(sink, src, len);
     }
+    if (impl->word_error != MDF_OK) return -1;
     if (src == NULL && len != 0) {
         return -1;
     }
@@ -3924,7 +4025,7 @@ int mdf_emit_cstr(mdf_impl *impl, mdf_sink *sink, const char *src)
 
 int mdf_emit_buffer_reset(mdf_impl *impl)
 {
-    if (impl == NULL) {
+    if (impl == NULL || impl->word_error != MDF_OK) {
         return -1;
     }
     mdf_impl_ensure_emit_buffer_initialized(impl);

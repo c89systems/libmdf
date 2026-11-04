@@ -950,6 +950,7 @@ static int lua_mdf_token_type(lua_State *L, int index)
     if (strcmp(s, "thematic_break") == 0) return MDF_TOKEN_THEMATIC_BREAK;
     if (strcmp(s, "document_end") == 0) return MDF_TOKEN_DOCUMENT_END;
     if (strcmp(s, "chart_block") == 0) return MDF_TOKEN_CHART_BLOCK;
+    if (strcmp(s, "literal_text") == 0) return MDF_TOKEN_LITERAL_TEXT;
     return luaL_error(L, "unknown token type: %s", s);
 }
 
@@ -1041,6 +1042,31 @@ static int lua_mdf_copy_result(lua_State *L, const char *out)
     lua_pushcfunction(L, lua_mdf_result_protected);
     lua_pushlightuserdata(L, (void *)out);
     return lua_pcall(L, 1, 1, 0);
+}
+
+static int lua_mdf_escape_markdown(lua_State *L)
+{
+    const char *text;
+    mdf *renderer;
+    mdf_status st;
+    char *out;
+    int copied;
+
+    luaL_checkstack(L, 16, "libmdf escape result");
+    text = lua_mdf_cstring(L, 1);
+    renderer = NULL;
+    out = NULL;
+    st = mdf_create(MDF_FORMAT_ANSI, NULL, &renderer);
+    if (st == MDF_OK) st = mdf_escape_markdown(renderer, text, &out);
+    if (st != MDF_OK) {
+        if (renderer != NULL) renderer->destroy(renderer);
+        return luaL_error(L, "mdf_escape_markdown: %s", mdf_status_string(st));
+    }
+    copied = lua_mdf_copy_result(L, out);
+    renderer->string_free(renderer, out);
+    renderer->destroy(renderer);
+    if (copied != LUA_OK) return lua_error(L);
+    return 1;
 }
 
 static int lua_mdf_render(lua_State *L)
@@ -1350,6 +1376,22 @@ static int lua_mdf_document_stream_set_geometry(lua_State *L)
         return luaL_error(L, "mdf_document_stream.set_geometry: %s: %s",
                           mdf_status_string(st), stream->mdf->error(stream->mdf));
     }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int lua_mdf_document_stream_set_word_buffer(lua_State *L)
+{
+    lua_mdf_document_stream *stream;
+    int bytes;
+    mdf_status st;
+
+    stream = lua_mdf_check_document_stream(L, 1);
+    bytes = lua_mdf_check_int_arg(L, 2);
+    if (bytes < 0) return luaL_argerror(L, 2, "word buffer must be nonnegative");
+    st = stream->mdf->set_word_buffer(stream->mdf, (size_t)bytes, lua_toboolean(L, 3));
+    if (st != MDF_OK) return luaL_error(L, "mdf_document_stream.set_word_buffer: %s: %s",
+                                      mdf_status_string(st), stream->mdf->error(stream->mdf));
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -1665,6 +1707,24 @@ static int lua_mdf_handle_set_geometry(lua_State *L)
     return 1;
 }
 
+static int lua_mdf_handle_set_word_buffer(lua_State *L)
+{
+    lua_mdf_handle *handle;
+    int bytes;
+    int disabled;
+    mdf_status st;
+
+    bytes = lua_mdf_check_int_arg(L, 2);
+    if (bytes < 0) return luaL_argerror(L, 2, "word buffer size must be nonnegative");
+    disabled = lua_toboolean(L, 3);
+    handle = lua_mdf_check_handle(L, 1);
+    st = handle->mdf->set_word_buffer(handle->mdf, (size_t)bytes, disabled);
+    if (st != MDF_OK) return luaL_error(L, "mdf_handle.set_word_buffer: %s: %s",
+                                      mdf_status_string(st), handle->mdf->error(handle->mdf));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 static int lua_mdf_handle_reset(lua_State *L)
 {
     lua_mdf_handle *handle;
@@ -1719,6 +1779,48 @@ static int lua_mdf_handle_write_token(lua_State *L)
                           handle->mdf->error(handle->mdf));
     }
     lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int lua_mdf_handle_write_literal(lua_State *L)
+{
+    lua_mdf_handle *handle;
+    const char *data;
+    size_t len;
+    mdf_status st;
+
+    data = lua_mdf_bytes(L, 2, &len);
+    handle = lua_mdf_check_handle(L, 1);
+    lua_mdf_refresh_handle_callbacks(handle, L);
+    handle = lua_mdf_check_handle(L, 1);
+    st = handle->mdf->write_literal(handle->mdf, data, len);
+    lua_mdf_raise_callback(L, &handle->failure);
+    if (st != MDF_OK) return luaL_error(L, "mdf_handle.write_literal: %s: %s",
+                                      mdf_status_string(st), handle->mdf->error(handle->mdf));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int lua_mdf_handle_escape_markdown(lua_State *L)
+{
+    lua_mdf_handle *handle;
+    const char *text;
+    char *out;
+    mdf_status st;
+    int copied;
+
+    luaL_checkstack(L, 16, "libmdf escape result");
+    text = lua_mdf_cstring(L, 2);
+    handle = lua_mdf_check_handle(L, 1);
+    out = NULL;
+    st = handle->mdf->escape_markdown(handle->mdf, text, &out);
+    if (st != MDF_OK) return luaL_error(L, "mdf_handle.escape_markdown: %s: %s",
+                                      mdf_status_string(st), handle->mdf->error(handle->mdf));
+    handle->callback_operation_active++;
+    copied = lua_mdf_copy_result(L, out);
+    handle->mdf->string_free(handle->mdf, out);
+    handle->callback_operation_active--;
+    if (copied != LUA_OK) return lua_error(L);
     return 1;
 }
 
@@ -1992,6 +2094,7 @@ static const luaL_Reg lua_mdf_funcs[] = {
     {"create", lua_mdf_new},
     {"document_stream", lua_mdf_document_stream_new},
     {"render", lua_mdf_render},
+    {"escape_markdown", lua_mdf_escape_markdown},
     {"render_stream", lua_mdf_render_stream},
     {"html_font_dump_paths", lua_mdf_html_font_dump_paths},
     {"html_c89_dump_paths", lua_mdf_html_c89_dump_paths},
@@ -2013,9 +2116,12 @@ static const luaL_Reg lua_mdf_methods[] = {
     {"set_sink", lua_mdf_handle_set_sink},
     {"set_width", lua_mdf_handle_set_width},
     {"set_geometry", lua_mdf_handle_set_geometry},
+    {"set_word_buffer", lua_mdf_handle_set_word_buffer},
     {"reset", lua_mdf_handle_reset},
     {"set_html_title", lua_mdf_handle_set_html_title},
     {"write_token", lua_mdf_handle_write_token},
+    {"write_literal", lua_mdf_handle_write_literal},
+    {"escape_markdown", lua_mdf_handle_escape_markdown},
     {"finish", lua_mdf_handle_finish},
     {"feed", lua_mdf_handle_feed},
     {"flush", lua_mdf_handle_flush},
@@ -2036,6 +2142,7 @@ static const luaL_Reg lua_mdf_document_stream_methods[] = {
     {"set_sink", lua_mdf_document_stream_set_sink},
     {"set_width", lua_mdf_document_stream_set_width},
     {"set_geometry", lua_mdf_document_stream_set_geometry},
+    {"set_word_buffer", lua_mdf_document_stream_set_word_buffer},
     {"reset", lua_mdf_document_stream_reset},
     {"set_html_title", lua_mdf_document_stream_set_html_title},
     {"error", lua_mdf_document_stream_error},
@@ -2066,6 +2173,7 @@ static void lua_mdf_set_token_constants(lua_State *L)
     lua_pushinteger(L, MDF_TOKEN_THEMATIC_BREAK); lua_setfield(L, -2, "THEMATIC_BREAK");
     lua_pushinteger(L, MDF_TOKEN_DOCUMENT_END); lua_setfield(L, -2, "DOCUMENT_END");
     lua_pushinteger(L, MDF_TOKEN_CHART_BLOCK); lua_setfield(L, -2, "CHART_BLOCK");
+    lua_pushinteger(L, MDF_TOKEN_LITERAL_TEXT); lua_setfield(L, -2, "LITERAL_TEXT");
     lua_setfield(L, -2, "token");
 }
 

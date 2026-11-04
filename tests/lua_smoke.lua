@@ -1751,3 +1751,51 @@ assert(c89_html:find('class="lights-out-footer"', 1, true))
 c89:close()
 assert(not pcall(mdf.new, {c89 = true}))
 assert(not pcall(mdf.new, {deck = true, c89 = true}))
+
+-- Literal fragments share quote layout and real sink/trace decisions.
+do
+  assert(mdf.escape_markdown("**bold**") == [=[\*\*bold\*\*]=])
+  assert(mdf.render(mdf.escape_markdown("**bold** &amp; <b> \\"),
+    {ansi_mode = "off", boring = true}) == "**bold** &amp; <b> \\\n")
+  local writes, traces = {}, {}
+  local h = mdf.new({ansi_mode = "off", width = 40, margin_left = 2,
+    write_trace = function(_, text) traces[#traces + 1] = text end})
+  h:set_sink(function(text) writes[#writes + 1] = text end)
+  h:set_word_buffer(4096, false)
+  assert(not pcall(h.set_word_buffer, h, 65537, false))
+  assert(not pcall(h.set_word_buffer, h, 1048576, false))
+  assert(h:escape_markdown("**bold**") == mdf.escape_markdown("**bold**"))
+  h:write_token({type = "blockquote_start"})
+  h:write_literal("**bo")
+  assert(not table.concat(writes):find("bo", 1, true), "literal tail stays undecided")
+  local before = #writes
+  h:write_literal("")
+  assert(#writes == before, "empty literal write emits nothing")
+  h:write_literal("ld** ")
+  assert(table.concat(writes):find("**bold**", 1, true), "word boundary emits literal syntax")
+  h:write_token({type = "literal_text", text = "[x](y) "})
+  h:write_literal([=[\*raw\*]=])
+  h:write_token({type = "blockquote_end"})
+  h:finish()
+  local text = table.concat(writes)
+  assert(text:find("[x](y)", 1, true) and text:find([=[\*raw\*]=], 1, true))
+  assert(#writes == #traces)
+  for i = 1, #writes do assert(writes[i] == traces[i]) end
+  h:close()
+end
+
+-- Document streams expose the same bounded word policy.
+do
+  local output = {}
+  local stream = mdf.document_stream({ansi_mode = "off", width = 80}, function(s) output[#output + 1] = s end)
+  assert(stream:set_word_buffer(7, true))
+  assert(not pcall(stream.set_word_buffer, stream, 65537, false))
+  stream:write("abcdefghijk")
+  assert(#output == 0)
+  assert(not pcall(stream.set_word_buffer, stream, 4096, false))
+  stream:finish_document()
+  assert(table.concat(output) == "abcdefg\n")
+  stream:begin_document()
+  assert(stream:set_word_buffer(4096, false))
+  stream:close()
+end

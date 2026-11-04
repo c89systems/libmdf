@@ -104,6 +104,7 @@ add_custom_target(libmdf-c89-assets DEPENDS "${LIBMDF_C89_HEADER}")
 set(LIBMDF_SOURCES
   src/mdf.c
   src/render.c
+  src/word_storage.c
   src/render_ansi.c
   src/render_ansi_blocks.c
   src/html_fonts.c

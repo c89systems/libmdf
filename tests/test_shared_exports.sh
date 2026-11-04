@@ -10,6 +10,7 @@ mdf_dump_html_jetbrains_mono_font
 mdf_dump_html_jetbrains_mono_font_force
 mdf_dump_html_jetbrains_mono_font_to_paths
 mdf_dump_html_jetbrains_mono_font_to_paths_force
+mdf_escape_markdown
 mdf_feed
 mdf_finish
 mdf_finish_document
@@ -28,6 +29,7 @@ mdf_set_geometry
 mdf_set_html_title
 mdf_set_sink
 mdf_set_width
+mdf_set_word_buffer
 mdf_status_string
 mdf_terminal_width
 mdf_theme_count
@@ -35,6 +37,7 @@ mdf_theme_exists
 mdf_theme_get_palette
 mdf_theme_heading_foreground
 mdf_theme_name
+mdf_write_literal
 mdf_write_token'
 
 case ${3:-elf} in

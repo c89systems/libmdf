@@ -134,6 +134,12 @@ typedef struct mdf_allocator {
     void (*free)(void *userdata, void *ptr, size_t size);
 } mdf_allocator;
 
+/** Default retained word bytes before optional file backing. */
+#define MDF_WORD_BUFFER_DEFAULT_BYTES 4096u
+/** Largest configurable retained word buffer. */
+#define MDF_WORD_BUFFER_MAX_BYTES 65536u
+/** Hard maximum bytes retained in one word's temporary file. */
+#define MDF_WORD_SPOOL_MAX_BYTES 1048576u
 /** Optional reusable-memory retention limits. Zero selects library defaults. */
 typedef struct mdf_memory_options {
     /** Total retained workspace capacity allowed after a render. */
@@ -421,7 +427,9 @@ typedef enum mdf_token_type {
      * fence info string. Prefer Markdown chart fences over constructing this
      * token manually; the chart-kind numeric values are not public API.
      */
-    MDF_TOKEN_CHART_BLOCK = 17
+    MDF_TOKEN_CHART_BLOCK = 17,
+    /** Literal inline text; uses normal word layout without Markdown syntax. */
+    MDF_TOKEN_LITERAL_TEXT = 18
 } mdf_token_type;
 
 /** Parser/renderer token passed to write_token implementations. */
@@ -570,6 +578,12 @@ struct mdf {
     /** Page a finite source using this ANSI receiver's options; see mdf_pager_source. */
     mdf_status (*pager_source)(mdf *self, const char *name, mdf_source *source,
                                mdf_pager_format format, const mdf_pager_control *control);
+    /** Configure bounded word storage; see mdf_set_word_buffer. */
+    mdf_status (*set_word_buffer)(mdf *self, size_t memory_limit, int disable_spooling);
+    /** Write a literal fragment to the bound sink; see mdf_write_literal. */
+    mdf_status (*write_literal)(mdf *self, const char *data, size_t len);
+    /** Allocate escaped Markdown; release through string_free. */
+    mdf_status (*escape_markdown)(mdf *self, const char *text, char **out);
 };
 
 /**
@@ -626,6 +640,20 @@ mdf_status mdf_set_sink(mdf *renderer, const mdf_sink *sink);
  */
 mdf_status mdf_set_width(mdf *renderer, int width);
 /**
+ * Configure storage for undecided ANSI/HTML words without changing rendering.
+ * memory_limit is a byte count; zero selects 4096, and values above 65536 are
+ * rejected. Spooling is enabled when disable_spooling is zero. A word exceeding
+ * the memory limit then uses an automatically deleted temporary file, capped
+ * at 1048576 bytes. Excess bytes are discarded until the normal decision
+ * boundary. With spooling disabled, only the memory-limit prefix is retained.
+ * Replays use bounded reads through the normal emitter; filling storage never
+ * forces a rendering decision or changes wrapping. Files are removed on word
+ * completion, reset, failure and destruction. Filesystem failures return
+ * MDF_ERROR_IO. Configure between documents or while no inline decision is
+ * pending; callbacks, pending words and deck renderers reject changes.
+ */
+mdf_status mdf_set_word_buffer(mdf *renderer, size_t memory_limit, int disable_spooling);
+/**
  * Atomically change the total width and ANSI margins of an existing renderer.
  * Margins must be nonnegative; ANSI content width must remain at least three
  * columns. The active incremental document is preserved. Only future output
@@ -663,6 +691,28 @@ mdf_status mdf_reset(mdf *renderer);
  * not bind that sink and cannot interrupt another active output operation.
  */
 mdf_status mdf_write_token(mdf *renderer, const mdf_token *token, mdf_sink *sink);
+/**
+ * Write literal text through the manual-token renderer and an explicit sink.
+ * Equivalent to MDF_TOKEN_LITERAL_TEXT: Markdown punctuation, escapes, entities
+ * and links are not interpreted. Existing wrapping, margins, quote/heading
+ * roles, destination policy and word storage apply. Successive fragments can
+ * form one word; a fragment boundary never forces output. Embedded newlines
+ * use normal NEWLINE token layout. Empty fragments are no-ops; data may be
+ * NULL only when len is zero. The sink is borrowed for this call.
+ * Requires closed inline Markdown syntax; unresolved syntax is rejected
+ * without emission. Deck renderers do not support manual token input.
+ */
+mdf_status mdf_write_literal(mdf *renderer, const char *data, size_t len, mdf_sink *sink);
+/**
+ * Allocate NUL-terminated Markdown with ASCII punctuation backslash-escaped.
+ * For example, **bold** becomes \\*\\*bold\\*\\*. Existing backslashes are
+ * escaped too. UTF-8, whitespace, indentation and line breaks are preserved;
+ * ordinary Markdown layout rules still apply. This helper materializes its
+ * result; use write_literal to render literal fragments directly instead.
+ * On success release *out through renderer->string_free. On failure *out is
+ * NULL. This operation does not render, emit, flush or alter pending input.
+ */
+mdf_status mdf_escape_markdown(mdf *renderer, const char *text, char **out);
 /**
  * Finish manual token rendering through an explicit sink borrowed for this
  * call only; it does not bind that sink and cannot interrupt an active output
