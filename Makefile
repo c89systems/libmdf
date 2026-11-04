@@ -1,4 +1,6 @@
-PREFIX ?= /usr/local
+prefix ?= /usr/local
+exec_prefix ?= $(prefix)
+bindir ?= $(exec_prefix)/bin
 CMAKE_BUILD_PARALLEL_LEVEL ?= 2
 export CMAKE_BUILD_PARALLEL_LEVEL
 .NOTPARALLEL:
@@ -14,7 +16,7 @@ help:
 	  '  make build                   Build the static native musl CLI' \
 	  '  make build-debug             Build native tests, Go parity tools and Lua facade' \
 	  '  make build-release           Build native Release libraries and static CLI' \
-	  '  make install                 Install static cmdf to DESTDIR/PREFIX/bin' \
+	  '  make install                 Install static cmdf using prefix/exec_prefix/bindir/DESTDIR' \
 	  '  make test                    Force the native CTest suite' \
 	  '  make test-release            Test the canonical native Release build' \
 	  '  make check-native            Reuse unchanged native suite success' \
@@ -56,6 +58,9 @@ build-debug:
 build-release:
 	@scripts/build.sh x86_64-linux-gnu-release
 
+install: export prefix := $(prefix)
+install: export exec_prefix := $(exec_prefix)
+install: export bindir := $(bindir)
 install:
 	@scripts/install_cmdf.sh
 

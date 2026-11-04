@@ -155,6 +155,18 @@ and RPATH refer to the local Bootlin collection. To install the CLI, use
 `make install` or configure `LIBMDF_CMDF_STATIC_RUNTIME=ON` together with
 `LIBMDF_INSTALL_BINARY=ON`. That executable is fully static and relocatable.
 
+`make install` uses the [GNU installation directory variables](https://www.gnu.org/software/make/manual/make.html#Directory-Variables):
+`prefix` defaults to `/usr/local`, `exec_prefix` to `$(prefix)`, and `bindir` to
+`$(exec_prefix)/bin`. It copies the already-built CLI to
+`$(DESTDIR)$(bindir)/cmdf`; changing install paths does not rebuild it.
+Use lowercase `prefix` in place of the previous uppercase `PREFIX`.
+
+```sh
+make install prefix="$HOME/.local"
+make install bindir="$HOME/bin"
+make install DESTDIR="$PWD/stage" prefix=/usr
+```
+
 ## pkg-config
 
 The SDK also ships relocatable pkg-config metadata. On Linux, use it with the
