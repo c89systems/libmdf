@@ -69,6 +69,7 @@ static int ansi_inline_emit_pending_emphasis(mdf_impl *impl, mdf_sink *sink, siz
 static int ansi_inline_flush_unmatched_nested_emphasis(mdf_impl *impl, mdf_sink *sink);
 static int ansi_inline_handle_streamed_emphasis_delim(mdf_impl *impl, mdf_sink *sink);
 static int ansi_inline_emit_streamed_emphasis_literal_char(mdf_impl *impl, mdf_sink *sink, char c);
+static int ansi_process_escaped_char(mdf_impl *impl, mdf_sink *sink, char c);
 static const char *ansi_inline_nested_emphasis_style(mdf_impl *impl, int nested_count, char *buf, size_t buf_cap);
 static int autolink_likely(const char *s, size_t len);
 static int autolink_is_email(const char *s, size_t len);
@@ -4956,9 +4957,7 @@ int ansi_inline_flush_literal(mdf_impl *impl, mdf_sink *sink)
 {
     if (impl->ansi_escape_pending) {
         impl->ansi_escape_pending = 0;
-        if (impl->inline_mode == 5) {
-            if (ansi_inline_emit_streamed_emphasis_literal_char(impl, sink, '\\') != 0) return -1;
-        } else if (ansi_write_visible_char(impl, sink, '\\') != 0) return -1;
+        if (ansi_process_escaped_char(impl, sink, '\\') != 0) return -1;
     }
     if (ansi_flush_link_tail(impl, sink) != 0) return -1;
     if (ansi_flush_pending_exact_fallback(impl, sink, '\0') != 0) return -1;
@@ -8968,6 +8967,13 @@ static int ansi_process_escaped_char(mdf_impl *impl, mdf_sink *sink, char c)
     mdf_word_storage *word;
     int rc;
 
+    /* Literal bytes still follow any syntax prefix retained before the escape.
+     * Use ordinary word flushing so a deferred URI slash keeps its boundary. */
+    if (impl->ansi_uri_scheme_pending && ansi_flush_word(impl, sink) != 0) return -1;
+    if (impl->inline_outer_paren_candidate) {
+        if (ansi_write_visible_cstr(impl, sink, "(") != 0) return -1;
+        impl->inline_outer_paren_candidate = 0;
+    }
     word = &impl->word;
     if (impl->inline_mode == 5) {
         if (!(impl->inline_emph_nested_delim != 0 && impl->inline_emph_nested_count > 0) &&
@@ -11508,7 +11514,8 @@ mdf_status ansi_renderer_finish(mdf_renderer *self, mdf_impl *impl, mdf_sink *si
 
 static mdf_status html_renderer_finish_flush_ansi_tail(mdf_renderer *self, mdf_impl *impl, mdf_sink *sink)
 {
-    if (!(impl->ansi_col > 0 || impl->ansi_pending_space || impl->word.len > 0)) {
+    if (!(impl->ansi_col > 0 || impl->ansi_pending_space || impl->word.len > 0 ||
+          impl->ansi_escape_pending)) {
         return MDF_OK;
     }
     if (html_bridge_run_ansi_newline(self, sink) != 0) {

@@ -2196,6 +2196,10 @@ static mdf_status instance_render(mdf_renderer *self, mdf_source *source, mdf_si
     deck_string_dispose(&title_source_data.prefix);
     if (impl->word_error != MDF_OK)
         st = mdf_renderer_fail_from_impl(self, impl, "word storage failed");
+    if (st != MDF_OK) {
+        mdf_word_clear(&impl->word);
+        mdf_word_clear(&impl->emph_word);
+    }
     impl->render_active = 0;
     return st;
 }

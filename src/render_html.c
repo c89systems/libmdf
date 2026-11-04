@@ -3038,7 +3038,8 @@ int html_bridge_run_ansi_newline(mdf_renderer *self, mdf_sink *sink)
 
     impl = (mdf_impl *)self->impl;
     html_bridge_scope_begin(self, sink, &bridge);
-    if (ansi_write_newline(impl, &bridge.sink) != 0) {
+    if ((impl->ansi_escape_pending && ansi_inline_flush_literal(impl, &bridge.sink) != 0) ||
+        ansi_write_newline(impl, &bridge.sink) != 0) {
         html_bridge_scope_end(&bridge);
         return -1;
     }

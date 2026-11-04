@@ -589,6 +589,74 @@ static int renderer_file_failure(void)
     return fails;
 }
 
+typedef struct failed_source {
+    mdf_impl *impl;
+    int sent;
+    int fd;
+    int emphasis;
+} failed_source;
+
+static size_t fail_after_word(void *userdata, char *dst, size_t cap, int *err)
+{
+    failed_source *source;
+    FILE *file;
+    size_t length;
+
+    source = (failed_source *)userdata;
+    *err = 0;
+    if (!source->sent) {
+        source->sent = 1;
+        length = cap < 512 ? cap : 512;
+        memset(dst, 'x', length);
+        if (source->emphasis && length >= 2) memcpy(dst, "**", 2);
+        return length;
+    }
+    file = source->emphasis ? source->impl->emph_word.file : source->impl->word.file;
+    source->fd = file == NULL ? -1 : fileno(file);
+    *err = 1;
+    return 0;
+}
+
+static int renderer_source_failure(int emphasis)
+{
+    render_capture *c;
+    mdf *r;
+    mdf_sink sink;
+    mdf_source source;
+    failed_source data;
+    mdf_status st;
+    int fails;
+
+    fails = 0;
+    c = (render_capture *)calloc(1, sizeof(*c));
+    if (c == NULL) return 1;
+    r = render_create(c, &sink, 80, 0, 1, 7, 0);
+    if (r == NULL) { free(c); return 1; }
+    memset(&data, 0, sizeof(data));
+    data.impl = (mdf_impl *)r->impl;
+    data.fd = -1;
+    data.emphasis = emphasis;
+    source.userdata = &data;
+    source.read = fail_after_word;
+    st = r->render(r, &source);
+    fails += check(st == MDF_ERROR_IO && strstr(r->error(r), "source") != NULL,
+                   "a source failure preserves its I/O status and diagnostic");
+    fails += check(data.fd >= 0, "source failure occurs after an undecided word has spilled");
+    fails += check(emphasis ? data.impl->emph_word.file == NULL : data.impl->word.file == NULL,
+                   "source failure clears the pending plain or styled word");
+    errno = 0;
+    fails += check(data.fd >= 0 && fcntl(data.fd, F_GETFD) == -1 && errno == EBADF &&
+                   data.impl->word.file == NULL && data.impl->emph_word.file == NULL,
+                   "render closes pending spools before returning a source failure");
+    fails += check(!c->bad && c->writes == c->traces && c->xs == 0,
+                   "source failure preserves sink/trace identity without emitting the undecided word");
+    fails += check(r->reset(r) == MDF_OK && r->write_literal(r, "next ", 5) == MDF_OK &&
+                   r->finish(r) == MDF_OK, "reset permits rendering after a failed source");
+    r->destroy(r);
+    free(c);
+    return fails;
+}
+
 static void *worker(void *unused)
 {
     static const size_t limits[] = {1, 7, MDF_WORD_MEMORY_DEFAULT, MDF_WORD_MEMORY_MAX};
@@ -600,6 +668,8 @@ static void *worker(void *unused)
     fails += compare_layout();
     fails += reader_and_failures();
     fails += renderer_file_failure();
+    fails += renderer_source_failure(0);
+    fails += renderer_source_failure(1);
     for (i = 0; i < 4; i++) fails += renderer_bounds(0, (int)i);
     fails += renderer_bounds(1, 0);
     fails += renderer_bounds(0, 4);

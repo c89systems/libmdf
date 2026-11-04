@@ -6003,7 +6003,13 @@ static int test_escaped_markdown_contract(void)
         "\\# heading\n\\> quote\n\\-\\-\\-\n",
         "_*(_\\*__ ]\n",
         "**\\[x\\](y)**\n",
-        "**\\<https://example.com\\>**\n"
+        "**\\<https://example.com\\>**\n",
+        "(\\*)",
+        "http:/\\*",
+        "(\\",
+        "http:/\\",
+        "(\\q)",
+        "http:/\\q"
     };
     static const char *const outputs[] = {
         "**bold**\n",
@@ -6017,7 +6023,13 @@ static int test_escaped_markdown_contract(void)
         "# heading > quote ---\n",
         "*(*]\n",
         "[x](y)\n",
-        "<https://example.com>\n"
+        "<https://example.com>\n",
+        "(*)\n",
+        "http:/*\n",
+        "(\\\n",
+        "http:/\\\n",
+        "(\\q)\n",
+        "http:/\\q\n"
     };
     mdf_options opts;
     mdf *renderer;
@@ -6364,6 +6376,74 @@ static int test_literal_html_contract(void)
     return fails;
 }
 
+static int test_token_escape_finish(mdf_format format)
+{
+    static const char *const inputs[] = {"\\", "abc\\", "(\\", "http:/\\", "(\\*)", "http:/\\*"};
+    static const char *const literal[] = {"\\", "abc\\", "(\\", "http:/\\", "(*)", "http:/*"};
+    mdf_options opts;
+    mdf *r;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    capture cap;
+    capture reference;
+    size_t i;
+    size_t offset;
+    size_t count;
+    size_t length;
+    int method;
+    int fails;
+
+    fails = 0;
+    for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        memset(&reference, 0, sizeof(reference));
+        for (method = 0; method < 3; method++) {
+            memset(&cap, 0, sizeof(cap));
+            mdf_options_init(&opts);
+            opts.ansi_mode = MDF_ANSI_ON;
+            opts.boring = 1;
+            opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+            if (format == MDF_FORMAT_ANSI) {
+                opts.write_trace.userdata = &cap;
+                opts.write_trace.emit = capture_trace;
+            }
+            sink.userdata = &cap;
+            sink.write = capture_write;
+            r = NULL;
+            st = mdf_create(format, &opts, &r);
+            if (st == MDF_OK && format == MDF_FORMAT_HTML) st = mdf_set_html_title(r, "Escapes");
+            if (st == MDF_OK) st = r->set_sink(r, &sink);
+            if (st == MDF_OK && method == 0) {
+                st = r->write_literal(r, literal[i], strlen(literal[i]));
+            } else {
+                memset(&token, 0, sizeof(token));
+                token.type = MDF_TOKEN_TEXT;
+                length = strlen(inputs[i]);
+                for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                    count = method == 1 ? length : 1;
+                    token.text = inputs[i] + offset;
+                    token.len = count;
+                    st = r->write_token(r, &token);
+                }
+            }
+            if (st == MDF_OK) st = r->finish(r);
+            fails += expect(st == MDF_OK && cap.out != NULL, "token escape finish succeeds");
+            if (format == MDF_FORMAT_ANSI)
+                fails += expect_trace_matches_writes(&cap, "escaped token sink writes match traces");
+            if (method == 0) reference = cap;
+            else {
+                fails += expect(reference.out != NULL && cap.out != NULL &&
+                                strcmp(reference.out, cap.out) == 0,
+                                "whole and fragmented tokens retain pending escapes in source order");
+                capture_free(&cap);
+            }
+            if (r != NULL) r->destroy(r);
+        }
+        capture_free(&reference);
+    }
+    return fails;
+}
+
 static int test_spooled_literal_html_contract(void)
 {
     static const size_t limits[] = {65536, 4096, 7};
@@ -6428,6 +6508,8 @@ int main(int argc, char **argv)
     fails += test_escaped_markdown_contract();
     fails += test_literal_escape_api_contract();
     fails += test_literal_html_contract();
+    fails += test_token_escape_finish(MDF_FORMAT_ANSI);
+    fails += test_token_escape_finish(MDF_FORMAT_HTML);
     fails += test_spooled_literal_html_contract();
     fails += test_escape_allocator_contract();
     fails += test_unicode_width_stream_contract();
