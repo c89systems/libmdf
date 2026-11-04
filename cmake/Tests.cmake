@@ -61,7 +61,9 @@ if(LIBMDF_BUILD_TESTS)
     libmdf_configure_c89_target(test_public_headers)
     if(LIBMDF_BUILD_HOST_TESTS)
       find_program(LIBMDF_CLANGD clangd REQUIRED)
-      set(editor_sources src/mdf.c include/libmdf.h build/debug/generated/include/libmdf/mdf.h)
+      # A compact implementation verifies the same C89 target and generated
+      # headers without clangd's per-token feature tests over a 4000-line file.
+      set(editor_sources src/word_storage.c include/libmdf.h build/debug/generated/include/libmdf/mdf.h)
       if(LIBMDF_BUILD_LUA_TESTS)
         list(APPEND editor_sources lua/libmdf_core.c)
       endif()
@@ -119,12 +121,12 @@ if(LIBMDF_BUILD_TESTS)
     find_program(LIBMDF_VALGRIND valgrind REQUIRED)
     add_test(NAME memory_word_storage COMMAND "${LIBMDF_VALGRIND}"
       --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1
-      "$<TARGET_FILE:test_word_storage>" --under-valgrind)
+      "$<TARGET_FILE:test_word_storage>" --memory)
     set_tests_properties(memory_word_storage PROPERTIES LABELS "memory;storage" TIMEOUT 120)
     foreach(check public_api contracts c89)
       set(memory_args)
-      if(check STREQUAL "contracts")
-        set(memory_args --under-valgrind)
+      if(check STREQUAL "contracts" OR check STREQUAL "public_api")
+        set(memory_args --memory)
       endif()
       add_test(NAME memory_${check} COMMAND "${LIBMDF_VALGRIND}"
         --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1

@@ -4,7 +4,8 @@ set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 work="$root/build/test-check-reuse"
 rm -rf -- "$work"
-mkdir -p "$work/source/scripts" "$work/source/testdata" "$work/source/assets/c89"
+mkdir -p "$work/source/scripts" "$work/source/testdata" "$work/source/assets/c89" "$work/source/cmake"
+touch "$work/source/cmake/Tests.cmake"
 printf pass > "$work/source/testdata/input"
 touch "$work/source/Makefile"
 for input in .clangd README.md LICENSE libmdf-scm-1.rockspec.in assets/c89/style.css; do printf 'valid\n' > "$work/source/$input"; done
@@ -27,13 +28,23 @@ set(LIBMDF_BUILD_HOST_TESTS ON)
 add_executable(test_public_api IMPORTED)
 add_executable(test_contracts IMPORTED)
 add_executable(test_c89 IMPORTED)
+add_executable(test_word_storage IMPORTED)
 set_target_properties(test_public_api test_contracts test_c89 PROPERTIES IMPORTED_LOCATION /bin/true)
+set_target_properties(test_word_storage PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/scripts/memory-probe.sh")
+add_test(NAME memory_probe COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/memory-probe.sh" "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(memory_probe PROPERTIES LABELS memory)
 option(ENABLE_PROBE "Register the fixture check" ON)
 if(ENABLE_PROBE)
   add_test(NAME probe COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/probe.sh" "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 include("${CHECKS_MODULE}")
 CMAKE
+cat > "$work/source/scripts/memory-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'run\n' >> "$1/memory-runs"
+PROBE
+chmod +x "$work/source/scripts/memory-probe.sh"
 cmake -S "$work/source" -B "$work/build" -G Ninja -DCHECKS_MODULE="$root/cmake/Checks.cmake" > "$work/configure.log"
 cmake --build "$work/build" --target check-native > "$work/first.log"
 [[ $(wc -l < "$work/build/runs") == 1 ]]
@@ -52,6 +63,16 @@ if cmake --build "$work/build" --target check-native > "$work/deleted.log" 2>&1;
   printf 'Deleted verification input left a stale native success record\n' >&2; exit 1;
 fi
 test ! -f "$work/build/checks/native.pass"
+# The word-storage executable is a real memory-suite input, including when
+# native sources are unchanged. Warm reuse must stop after that binary changes.
+cmake -S "$work/source" -B "$work/build" -DENABLE_PROBE=ON > "$work/memory-configure.log"
+cmake --build "$work/build" --target check-memory > "$work/memory-first.log"
+[[ $(wc -l < "$work/build/memory-runs") == 1 ]]
+cmake --build "$work/build" --target check-memory > "$work/memory-warm.log"
+[[ $(wc -l < "$work/build/memory-runs") == 1 ]]
+printf '\n# changed word-storage executable\n' >> "$work/source/scripts/memory-probe.sh"
+cmake --build "$work/build" --target check-memory > "$work/memory-changed.log"
+[[ $(wc -l < "$work/build/memory-runs") == 2 ]]
 # Root packaging inputs participate in the native fixture suite as well.
 printf changed > "$work/source/testdata/input"
 cmake -S "$work/source" -B "$work/build" -DENABLE_PROBE=ON > "$work/root-configure.log"

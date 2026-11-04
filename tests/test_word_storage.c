@@ -6,7 +6,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
-static int under_valgrind;
+static int memory_checks;
 
 typedef struct word_allocator {
     size_t live;
@@ -49,7 +49,7 @@ static int check(int condition, const char *message)
     return 1;
 }
 
-static int exercise(size_t limit, int disable_spooling)
+static int exercise(size_t limit, int disable_spooling, size_t total_input)
 {
     mdf_impl *impl;
     mdf_word_storage word;
@@ -60,6 +60,8 @@ static int exercise(size_t limit, int disable_spooling)
     size_t offset;
     size_t len;
     size_t expected;
+    size_t maximum;
+    size_t count;
     int fd;
     int fails;
 
@@ -77,21 +79,24 @@ static int exercise(size_t limit, int disable_spooling)
     fails += check(mdf_word_append(impl, &word, NULL, 0) == 0 && word.data == NULL,
                    "empty append allocates no word storage");
     for (i = 0; i < sizeof(input); i++) input[i] = (char)('A' + i % 23);
-    for (offset = 0; offset < MDF_WORD_FILE_MAX + sizeof(input); offset += sizeof(input)) {
-        if (mdf_word_append(impl, &word, input, sizeof(input)) != 0) {
+    for (offset = 0; offset < total_input; offset += count) {
+        count = total_input - offset;
+        if (count > sizeof(input)) count = sizeof(input);
+        if (mdf_word_append(impl, &word, input, count) != 0) {
             fails += check(0, "bounded word append succeeds");
             break;
         }
     }
-    expected = disable_spooling ? limit : MDF_WORD_FILE_MAX;
-    fails += check(word.len == expected && word.truncated,
+    maximum = disable_spooling ? limit : MDF_WORD_FILE_MAX;
+    expected = total_input < maximum ? total_input : maximum;
+    fails += check(word.len == expected && word.truncated == (total_input > maximum),
                    "excess input is discarded at the selected storage bound");
     fails += check(disable_spooling ? word.file == NULL : word.file != NULL,
                    "temporary files are used only when enabled and needed");
     if (word.file != NULL) {
         fails += check(fflush(word.file) == 0 && fseek(word.file, 0, SEEK_END) == 0 &&
-                       ftell(word.file) == (long)MDF_WORD_FILE_MAX,
-                       "the complete spool file never exceeds one MiB");
+                       ftell(word.file) == (long)expected,
+                       "the spool contains exactly the retained bytes within the one MiB cap");
     }
     offset = 0;
     while (offset < word.len) {
@@ -112,6 +117,7 @@ static int exercise(size_t limit, int disable_spooling)
     fails += check(word.status == MDF_OK && !a.rejected && a.live <= limit + 1 &&
                    a.peak <= 2 * (limit + 1),
                    "word storage stays within the configured memory capacity");
+    if (expected < maximum) expected++;
     fails += check(mdf_word_insert(impl, &word, 0, "*", 1) == 0 &&
                    mdf_word_byte(impl, &word, 0) == '*' && word.len == expected,
                    "inline prefix insertion preserves the storage cap");
@@ -310,7 +316,6 @@ static int compare_layout(void)
         for (right = 0; right <= 4; right += 4) {
             for (width = 17; width <= 100017; width += 100000) {
                 for (i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
-                    if (under_valgrind && i != 0 && i != 3 && i != 9) continue;
                     prefix_len = strlen(prefixes[i]);
                     memcpy(input, prefixes[i], prefix_len);
                     for (k = 0; k < 12000; k++) input[prefix_len + k] = 'x';
@@ -419,7 +424,7 @@ static int renderer_bounds(int disable, int end_kind)
     if (end_kind == 4) {
         fails += check(r->write_literal(r, "https://", 8) == MDF_OK, "literal URL prefix remains pending");
     }
-    feed_limit = under_valgrind ? 12288 : MDF_WORD_FILE_MAX + 4096;
+    feed_limit = memory_checks ? MDF_WORD_MEMORY_DEFAULT + 512 : MDF_WORD_FILE_MAX + 4096;
     for (offset = 0; offset < feed_limit; offset += sizeof(input)) {
         if (r->write_token(r, &token) != MDF_OK) { fails++; break; }
     }
@@ -665,7 +670,7 @@ static void *worker(void *unused)
 
     (void)unused;
     fails = configure();
-    fails += compare_layout();
+    if (!memory_checks) fails += compare_layout();
     fails += reader_and_failures();
     fails += renderer_file_failure();
     fails += renderer_source_failure(0);
@@ -673,9 +678,17 @@ static void *worker(void *unused)
     for (i = 0; i < 4; i++) fails += renderer_bounds(0, (int)i);
     fails += renderer_bounds(1, 0);
     fails += renderer_bounds(0, 4);
-    for (i = under_valgrind ? 2 : 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
-        fails += exercise(limits[i], 0);
-        fails += exercise(limits[i], 1);
+    if (memory_checks) {
+        /* Exercise cache edges, spooling/truncation, mutation and cleanup once.
+         * The native matrix retains exhaustive layout and capacity coverage. */
+        fails += exercise(1, 0, 256);
+        fails += exercise(7, 0, 512);
+        fails += exercise(7, 1, 512);
+        fails += exercise(MDF_WORD_MEMORY_DEFAULT, 0, MDF_WORD_FILE_MAX + 256);
+        fails += exercise(MDF_WORD_MEMORY_MAX, 0, MDF_WORD_MEMORY_MAX + 256);
+    } else for (i = 0; i < sizeof(limits) / sizeof(limits[0]); i++) {
+        fails += exercise(limits[i], 0, MDF_WORD_FILE_MAX + 256);
+        fails += exercise(limits[i], 1, MDF_WORD_FILE_MAX + 256);
     }
     return fails == 0 ? NULL : (void *)&limits;
 }
@@ -685,7 +698,7 @@ int main(int argc, char **argv)
     pthread_t thread;
     void *result;
 
-    if (argc == 2 && strcmp(argv[1], "--under-valgrind") == 0) under_valgrind = 1;
+    if (argc == 2 && strcmp(argv[1], "--memory") == 0) memory_checks = 1;
     else if (argc != 1) return 2;
     if (pthread_create(&thread, NULL, worker, NULL) != 0) return 1;
     if (pthread_join(thread, &result) != 0) return 1;

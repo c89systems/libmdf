@@ -1179,6 +1179,9 @@ make release
 Hardening targets use the Bootlin-built development executables directly. Valgrind
 is a host analysis tool; it checks the selected Bootlin runtime rather than
 substituting a host-built sanitizer configuration.
+The native suite retains the full layout, fragmentation and capacity matrices.
+Valgrind uses compact ownership/failure cases covering spool replay, the 1 MiB
+cap, allocation and I/O failures, adaptive table conversion, reset and destroy.
 
 ```sh
 make valgrind

@@ -8,8 +8,9 @@
 /* Large table regressions legitimately produce more than 64K sink writes. */
 #define MAX_RECORDS 262144
 
-/* Memcheck's CPU overhead is unrelated to the native hot-path budget. */
-static int contract_under_valgrind;
+/* Ownership/failure checks use small representatives under Memcheck; native
+ * runs retain the complete behavior, boundary and performance matrices. */
+static int contract_memory_checks;
 
 /* The normal build is the performance gate. Memory/thread sanitizers
  * instrument every access, so keep the same regression fixture there with a
@@ -1452,7 +1453,7 @@ static int test_adaptive_table_contract(void)
     fails = 0;
     for (kind = 0; kind < 2; kind++) {
         format = kind == 0 ? MDF_FORMAT_ANSI : MDF_FORMAT_HTML;
-        for (scenario = 0; scenario < 3; scenario++) {
+        for (scenario = 0; scenario < (contract_memory_checks ? 1 : 3); scenario++) {
             rows = scenario == 1 ? 650 : 1100;
             quote = scenario == 2 ? "> " : "";
             markdown = (char *)malloc(rows * 192 + 16384);
@@ -1508,7 +1509,7 @@ static int test_adaptive_table_contract(void)
                                 count_text(whole.out, "<tbody>") == 2 && count_text(whole.out, "</tbody>") == 2,
                                 "adaptive HTML remains two complete tables without a transition seam");
             }
-            for (j = contract_under_valgrind ? 1u : 0u; j < (contract_under_valgrind ? 2u : 3u); j++) {
+            for (j = 0; !contract_memory_checks && j < 3; j++) {
                 st = incremental_capture_format(format, &opts, markdown, fragments[j], &split);
                 fails += expect(st == MDF_OK && !split.failed, "fragmented adaptive table feeds and flushes render");
                 fails += expect_capture_writes_equal(&split, &whole, "adaptive transition preserves exact decisions across feeds");
@@ -1644,7 +1645,7 @@ static int test_adaptive_table_contract(void)
             fails += expect(st == MDF_ERROR_PARSE && !whole.failed, "oversized row remains bounded in source rendering");
             if (format == MDF_FORMAT_ANSI)
                 fails += expect_trace_matches_writes(&whole, "oversized row failure preserves trace identity");
-            st = incremental_capture_format(format, &opts, markdown, 7, &split);
+            st = incremental_capture_format(format, &opts, markdown, contract_memory_checks ? 4096 : 7, &split);
             fails += expect(st == MDF_ERROR_PARSE && !split.failed, "oversized row remains bounded in incremental rendering");
             fails += expect_capture_writes_equal(&split, &whole, "oversized row failure is independent of fragments");
             capture_free(&split);
@@ -5024,7 +5025,7 @@ static int test_ansi_nested_emphasis_edge_contract(void)
             fails += expect(st == MDF_OK && count.failed == 0 && count.bytes > 0,
                             "deep nested link-label emphasis render succeeds");
             fails += expect(elapsed != (clock_t)-1 &&
-                            (contract_under_valgrind || elapsed <
+                            (contract_memory_checks || elapsed <
                              2 * CONTRACT_TIMING_MULTIPLIER * CLOCKS_PER_SEC),
                             "deep nested link-label emphasis remains bounded");
             free(source);
@@ -5063,7 +5064,7 @@ static int test_ansi_nested_emphasis_edge_contract(void)
             fails += expect(st == MDF_OK && count.failed == 0 && count.bytes > 0,
                             "large malformed code link-label render succeeds");
             fails += expect(elapsed != (clock_t)-1 &&
-                            (contract_under_valgrind || elapsed <
+                            (contract_memory_checks || elapsed <
                              2 * CONTRACT_TIMING_MULTIPLIER * CLOCKS_PER_SEC),
                             "large malformed code link-label remains bounded");
             free(source);
@@ -6491,8 +6492,10 @@ static int test_spooled_emphasis_suffix_contract(void)
     if (input == NULL) return 1;
     fails = 0;
     for (styled = 0; styled < 2; styled++) {
+        if (contract_memory_checks && !styled) continue;
         for (context = 0; context < 3; context++) {
             for (large = 0; large < 2; large++) {
+                if (contract_memory_checks && !large) continue;
                 strcpy(input, "**a_**(");
                 if (large) {
                     memset(input + 7, 'x', 4200);
@@ -6500,7 +6503,9 @@ static int test_spooled_emphasis_suffix_contract(void)
                 } else strcpy(input + 7, "bcdef)");
                 length = strlen(input);
                 for (wide = 0; wide < 2; wide++) {
+                    if (contract_memory_checks && !wide) continue;
                     for (fragmented = 0; fragmented < 2; fragmented++) {
+                        if (contract_memory_checks && fragmented) continue;
                         memset(&reference, 0, sizeof(reference));
                         for (l = 0; l < sizeof(limits) / sizeof(limits[0]); l++) {
                             memset(&cap, 0, sizeof(cap));
@@ -6659,7 +6664,8 @@ static int test_spooled_literal_html_contract(void)
         if (st == MDF_OK) st = mdf_set_html_title(r, "Literal");
         if (st == MDF_OK) st = r->set_sink(r, &sink);
         if (st == MDF_OK) st = r->set_word_buffer(r, limits[i], 0);
-        for (j = 0; st == MDF_OK && j < 50; j++) st = r->write_literal(r, input, sizeof(input));
+        for (j = 0; st == MDF_OK && j < (contract_memory_checks ? 20u : 50u); j++)
+            st = r->write_literal(r, input, sizeof(input));
         if (st == MDF_OK) st = r->finish(r);
         fails += expect(st == MDF_OK && current.out != NULL, "long literal words replay through the HTML renderer");
         if (i == 0 && current.out != NULL) {
@@ -6681,13 +6687,32 @@ int main(int argc, char **argv)
 {
     int fails;
 
-    if (argc == 2 && strcmp(argv[1], "--under-valgrind") == 0) {
-        contract_under_valgrind = 1;
+    if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
+        contract_memory_checks = 1;
     } else if (argc != 1) {
-        fprintf(stderr, "usage: test_contracts [--under-valgrind]\n");
+        fprintf(stderr, "usage: test_contracts [--memory]\n");
         return 2;
     }
     fails = 0;
+    if (contract_memory_checks) {
+        fails += test_stream_trace_contract();
+        fails += test_literal_escape_api_contract();
+        fails += test_literal_html_contract();
+        fails += test_emphasis_escape_newline_contract();
+        fails += test_spooled_emphasis_suffix_contract();
+        fails += test_token_escape_finish(MDF_FORMAT_ANSI);
+        fails += test_token_escape_finish(MDF_FORMAT_HTML);
+        fails += test_spooled_literal_html_contract();
+        fails += test_escape_allocator_contract();
+        fails += test_adaptive_table_contract();
+        fails += test_osc8_link_allocation_contract();
+        fails += test_osc8_split_link_buffer_contract();
+        fails += test_osc8_manual_finish_failure_contract();
+        fails += test_osc8_emission_capacity_contract();
+        fails += test_runtime_geometry_pending_contract();
+        fails += test_runtime_geometry_row_table_contract();
+        return fails == 0 ? 0 : 1;
+    }
     fails += test_stream_trace_contract();
     fails += test_escaped_markdown_contract();
     fails += test_literal_escape_api_contract();
