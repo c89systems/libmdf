@@ -1204,7 +1204,9 @@ replace the full parity matrix.
 through a test utility linked directly against the library. The golden matrix
 covers three broad Markdown fixtures across ANSI, asymmetric ANSI margins,
 HTML, and deck variants, plus OSC8 label fixtures at narrow and normal widths
-in styled and boring modes. Regenerate those snapshots deliberately with
+in styled and boring modes. Manual TEXT/NEWLINE token cases also cover escapes
+inside emphasis and plain suffix styling at tiny, default and memory-backed
+word-buffer limits. Regenerate those snapshots deliberately with
 `make golden-update` only when the rendered library output change is
 intentional.
 

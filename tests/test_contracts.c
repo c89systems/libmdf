@@ -6376,6 +6376,190 @@ static int test_literal_html_contract(void)
     return fails;
 }
 
+static int test_emphasis_escape_newline_contract(void)
+{
+    static const char *const delimiters[] = {"*", "**", "***"};
+    static const char *const tails[] = {"world", "*world", "_world", "\\world"};
+    mdf_options opts;
+    mdf *r;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    capture cap;
+    capture reference;
+    char text[128];
+    size_t d;
+    size_t t;
+    size_t offset;
+    size_t length;
+    size_t count;
+    int mode;
+    int method;
+    int part;
+    int fails;
+
+    fails = 0;
+    for (mode = 0; mode < 3; mode++) {
+        for (d = 0; d < sizeof(delimiters) / sizeof(delimiters[0]); d++) {
+            for (t = 0; t < sizeof(tails) / sizeof(tails[0]); t++) {
+                memset(&reference, 0, sizeof(reference));
+                for (method = 0; method < 3; method++) {
+                    memset(&cap, 0, sizeof(cap));
+                    mdf_options_init(&opts);
+                    opts.ansi_mode = mode == 0 ? MDF_ANSI_OFF : MDF_ANSI_ON;
+                    opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+                    if (mode < 2) {
+                        opts.write_trace.userdata = &cap;
+                        opts.write_trace.emit = capture_trace;
+                    }
+                    sink.userdata = &cap;
+                    sink.write = capture_write;
+                    r = NULL;
+                    st = mdf_create(mode == 2 ? MDF_FORMAT_HTML : MDF_FORMAT_ANSI, &opts, &r);
+                    if (st == MDF_OK && mode == 2) st = mdf_set_html_title(r, "Escapes");
+                    if (st == MDF_OK) st = r->set_sink(r, &sink);
+                    memset(&token, 0, sizeof(token));
+                    for (part = 0; st == MDF_OK && part < (method == 0 ? 1 : 2); part++) {
+                        if (method == 0)
+                            sprintf(text, "%shello\\\\ %s%s", delimiters[d], tails[t], delimiters[d]);
+                        else if (part == 0) sprintf(text, "%shello\\", delimiters[d]);
+                        else sprintf(text, "%s%s", tails[t], delimiters[d]);
+                        length = strlen(text);
+                        token.type = MDF_TOKEN_TEXT;
+                        for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                            count = method == 2 ? 1 : length;
+                            token.text = text + offset;
+                            token.len = count;
+                            st = r->write_token(r, &token);
+                        }
+                        if (st == MDF_OK && method != 0 && part == 0) {
+                            token.type = MDF_TOKEN_NEWLINE;
+                            token.text = NULL;
+                            token.len = 0;
+                            st = r->write_token(r, &token);
+                        }
+                    }
+                    if (st == MDF_OK) st = r->finish(r);
+                    fails += expect(st == MDF_OK && cap.out != NULL, "emphasis newline rendering succeeds");
+                    if (mode < 2)
+                        fails += expect_trace_matches_writes(&cap, "emphasis newline sink writes match traces");
+                    if (mode == 0 && d == 0 && t == 0)
+                        fails += expect(cap.out != NULL && strcmp(cap.out, "hello\\ world\n") == 0,
+                                        "the retained backslash precedes the newline's space");
+                    if (method == 0) reference = cap;
+                    else {
+                        if (cap.out == NULL || reference.out == NULL || strcmp(cap.out, reference.out) != 0)
+                            fprintf(stderr, "emphasis newline mismatch mode=%d delimiter=%lu tail=%lu method=%d\n",
+                                    mode, (unsigned long)d, (unsigned long)t, method);
+                        fails += expect(cap.out != NULL && reference.out != NULL &&
+                                        strcmp(cap.out, reference.out) == 0,
+                                        "a NEWLINE token resolves escapes while retaining emphasis and punctuation semantics");
+                        capture_free(&cap);
+                    }
+                    if (r != NULL) r->destroy(r);
+                }
+                capture_free(&reference);
+            }
+        }
+    }
+    return fails;
+}
+
+static int test_spooled_emphasis_suffix_contract(void)
+{
+    static const size_t limits[] = {8192, 0, 7};
+    mdf_options opts;
+    mdf *r;
+    mdf_sink sink;
+    mdf_token token;
+    mdf_status st;
+    capture cap;
+    capture reference;
+    char *input;
+    size_t length;
+    size_t offset;
+    size_t count;
+    size_t l;
+    int styled;
+    int context;
+    int large;
+    int wide;
+    int fragmented;
+    int fails;
+
+    input = (char *)malloc(4300);
+    if (input == NULL) return 1;
+    fails = 0;
+    for (styled = 0; styled < 2; styled++) {
+        for (context = 0; context < 3; context++) {
+            for (large = 0; large < 2; large++) {
+                strcpy(input, "**a_**(");
+                if (large) {
+                    memset(input + 7, 'x', 4200);
+                    strcpy(input + 4207, ")");
+                } else strcpy(input + 7, "bcdef)");
+                length = strlen(input);
+                for (wide = 0; wide < 2; wide++) {
+                    for (fragmented = 0; fragmented < 2; fragmented++) {
+                        memset(&reference, 0, sizeof(reference));
+                        for (l = 0; l < sizeof(limits) / sizeof(limits[0]); l++) {
+                            memset(&cap, 0, sizeof(cap));
+                            mdf_options_init(&opts);
+                            opts.ansi_mode = styled ? MDF_ANSI_ON : MDF_ANSI_OFF;
+                            opts.width = wide ? 8192 : 80;
+                            opts.write_trace.userdata = &cap;
+                            opts.write_trace.emit = capture_trace;
+                            sink.userdata = &cap;
+                            sink.write = capture_write;
+                            r = NULL;
+                            st = mdf_create(MDF_FORMAT_ANSI, &opts, &r);
+                            if (st == MDF_OK) st = r->set_sink(r, &sink);
+                            if (st == MDF_OK) st = r->set_word_buffer(r, limits[l], 0);
+                            memset(&token, 0, sizeof(token));
+                            token.level = context == 2 ? 2 : 0;
+                            if (st == MDF_OK && context > 0) {
+                                token.type = context == 1 ? MDF_TOKEN_BLOCKQUOTE_START : MDF_TOKEN_HEADING_START;
+                                st = r->write_token(r, &token);
+                            }
+                            token.type = MDF_TOKEN_TEXT;
+                            for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                                count = fragmented ? 1 : length;
+                                token.text = input + offset;
+                                token.len = count;
+                                st = r->write_token(r, &token);
+                            }
+                            if (st == MDF_OK && context > 0) {
+                                token.type = context == 1 ? MDF_TOKEN_BLOCKQUOTE_END : MDF_TOKEN_HEADING_END;
+                                token.text = NULL;
+                                token.len = 0;
+                                st = r->write_token(r, &token);
+                            }
+                            if (st == MDF_OK) st = r->finish(r);
+                            fails += expect(st == MDF_OK && cap.out != NULL, "styled suffix rendering succeeds");
+                            fails += expect_trace_matches_writes(&cap, "styled suffix sink writes match traces");
+                            if (styled && context == 0 && !large && !fragmented)
+                                fails += expect_contains(cap.out, "\033[0m(bcdef)", "plain suffix does not reopen emphasis styles");
+                            if (l == 0) reference = cap;
+                            else {
+                                if (cap.out == NULL || reference.out == NULL || strcmp(cap.out, reference.out) != 0)
+                                    fprintf(stderr, "suffix mismatch styled=%d context=%d large=%d wide=%d fragmented=%d limit=%lu\n",
+                                            styled, context, large, wide, fragmented, (unsigned long)limits[l]);
+                                fails += expect(cap.out != NULL && reference.out != NULL && strcmp(cap.out, reference.out) == 0,
+                                                "file-backed suffix style and wrapping match memory-backed rendering");
+                                capture_free(&cap);
+                            }
+                            if (r != NULL) r->destroy(r);
+                        }
+                        capture_free(&reference);
+                    }
+                }
+            }
+        }
+    }
+    free(input);
+    return fails;
+}
+
 static int test_token_escape_finish(mdf_format format)
 {
     static const char *const inputs[] = {"\\", "abc\\", "(\\", "http:/\\", "(\\*)", "http:/\\*"};
@@ -6508,6 +6692,8 @@ int main(int argc, char **argv)
     fails += test_escaped_markdown_contract();
     fails += test_literal_escape_api_contract();
     fails += test_literal_html_contract();
+    fails += test_emphasis_escape_newline_contract();
+    fails += test_spooled_emphasis_suffix_contract();
     fails += test_token_escape_finish(MDF_FORMAT_ANSI);
     fails += test_token_escape_finish(MDF_FORMAT_HTML);
     fails += test_spooled_literal_html_contract();

@@ -51,6 +51,40 @@ static int count_write(void *userdata, const char *src, size_t len)
     return 0;
 }
 
+static mdf_status render_text_tokens(mdf *renderer, FILE *fp, mdf_sink *sink)
+{
+    char text[256];
+    mdf_token token;
+    mdf_status st;
+    size_t length;
+    size_t start;
+    size_t i;
+
+    st = renderer->reset(renderer);
+    memset(&token, 0, sizeof(token));
+    while (st == MDF_OK && (length = fread(text, 1, sizeof(text), fp)) > 0) {
+        start = 0;
+        for (i = 0; st == MDF_OK && i <= length; i++) {
+            if (i < length && text[i] != '\n') continue;
+            if (i > start) {
+                token.type = MDF_TOKEN_TEXT;
+                token.text = text + start;
+                token.len = i - start;
+                st = mdf_write_token(renderer, &token, sink);
+            }
+            if (st == MDF_OK && i < length) {
+                token.type = MDF_TOKEN_NEWLINE;
+                token.text = NULL;
+                token.len = 0;
+                st = mdf_write_token(renderer, &token, sink);
+            }
+            start = i + 1;
+        }
+    }
+    if (st == MDF_OK && ferror(fp)) return MDF_ERROR_IO;
+    return st == MDF_OK ? mdf_finish(renderer, sink) : st;
+}
+
 static int parse_int_arg(const char *s, int *out)
 {
     char *end;
@@ -58,7 +92,7 @@ static int parse_int_arg(const char *s, int *out)
 
     errno = 0;
     value = strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0' || value < 0 || value > 10000) {
+    if (errno != 0 || end == s || *end != '\0' || value < 0 || value > 65536) {
         return -1;
     }
     *out = (int)value;
@@ -86,7 +120,7 @@ static void usage(const char *argv0)
 {
     fprintf(stderr,
             "usage: %s [--ansi|--html|--deck] [--repeat N] [-w N] [--boring] [--osc8] "
-            "[--margin-left N] [--margin-right N] [--slide-numbers] "
+            "[--margin-left N] [--margin-right N] [--word-buffer N] [--text-tokens] [--slide-numbers] "
             "[-x fade|cross|hard] input.md\n",
             argv0);
 }
@@ -104,11 +138,17 @@ int main(int argc, char **argv)
     mdf_status st;
     count_sink counted;
     int repeat;
+    int word_buffer;
+    int word_buffer_set;
+    int text_tokens;
     int i;
 
     format = MDF_FORMAT_ANSI;
     input = NULL;
     repeat = 1;
+    word_buffer = 0;
+    word_buffer_set = 0;
+    text_tokens = 0;
     mdf_options_init(&opts);
     opts.ansi_mode = MDF_ANSI_ON;
 
@@ -149,6 +189,15 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 return 2;
             }
+        } else if (strcmp(argv[i], "--text-tokens") == 0) {
+            text_tokens = 1;
+        } else if (strcmp(argv[i], "--word-buffer") == 0) {
+            word_buffer_set = 1;
+            i++;
+            if (i >= argc || parse_int_arg(argv[i], &word_buffer) != 0) {
+                usage(argv[0]);
+                return 2;
+            }
         } else if (strcmp(argv[i], "--slide-numbers") == 0) {
             opts.slide_numbers = 1;
         } else if (strcmp(argv[i], "-x") == 0 || strcmp(argv[i], "--transition") == 0) {
@@ -182,8 +231,10 @@ int main(int argc, char **argv)
 
     renderer = NULL;
     st = mdf_create(format, &opts, &renderer);
+    if (st == MDF_OK && word_buffer_set) st = renderer->set_word_buffer(renderer, (size_t)word_buffer, 0);
     if (st != MDF_OK) {
-        fprintf(stderr, "mdf_create: %s\n", mdf_status_string(st));
+        fprintf(stderr, "renderer setup: %s\n", mdf_status_string(st));
+        if (renderer != NULL) renderer->destroy(renderer);
         fclose(fp);
         return 1;
     }
@@ -205,7 +256,7 @@ int main(int argc, char **argv)
         src.read = file_read;
         sink.userdata = repeat == 1 ? (void *)stdout : (void *)&counted;
         sink.write = repeat == 1 ? stdout_write : count_write;
-        st = mdf_render(renderer, &src, &sink);
+        st = text_tokens ? render_text_tokens(renderer, fp, &sink) : mdf_render(renderer, &src, &sink);
         if (st != MDF_OK) {
             fprintf(stderr, "render: %s: %s\n", mdf_status_string(st),
                     renderer->error(renderer) != NULL ? renderer->error(renderer) : "");

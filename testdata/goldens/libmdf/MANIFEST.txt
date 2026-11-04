@@ -135,6 +135,22 @@ terminal-wrapped-links.ansi.styled.w80.margin-l6-r0 tests/golden-fixtures/termin
 terminal-wrapped-links.ansi.boring.w80.margin-l6-r0 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 6 --margin-right 0
 terminal-wrapped-links.ansi.styled.w80.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi -w 80 --margin-left 2 --margin-right 2
 terminal-wrapped-links.ansi.boring.w80.margin-l2-r2 tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w 80 --margin-left 2 --margin-right 2
+emphasis-suffix-storage.ansi.styled.w80.word-0 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 0
+emphasis-suffix-storage.ansi.styled.w80.word-7 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 7
+emphasis-suffix-storage.ansi.styled.w80.word-8192 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 8192
+emphasis-suffix-storage.ansi.boring.w80.word-0 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 0 --boring
+emphasis-suffix-storage.ansi.boring.w80.word-7 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 7 --boring
+emphasis-suffix-storage.ansi.boring.w80.word-8192 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 80 --word-buffer 8192 --boring
+emphasis-suffix-storage.ansi.styled.w8192.word-0 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 0
+emphasis-suffix-storage.ansi.styled.w8192.word-7 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 7
+emphasis-suffix-storage.ansi.styled.w8192.word-8192 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 8192
+emphasis-suffix-storage.ansi.boring.w8192.word-0 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 0 --boring
+emphasis-suffix-storage.ansi.boring.w8192.word-7 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 7 --boring
+emphasis-suffix-storage.ansi.boring.w8192.word-8192 tests/golden-fixtures/emphasis-suffix-storage.md --ansi --text-tokens -w 8192 --word-buffer 8192 --boring
+emphasis-token-boundaries.ansi.styled.w12 tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens -w 12
+emphasis-token-boundaries.ansi.boring.w12 tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens --boring -w 12
+emphasis-token-boundaries.ansi.styled.w80 tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens -w 80
+emphasis-token-boundaries.ansi.boring.w80 tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens --boring -w 80
 url-wrap-centaur.ansi.styled.w20.margin-l0-r0 testdata/centaur-post.md --ansi -w 20 --margin-left 0 --margin-right 0
 url-wrap-centaur.ansi.styled.w40.margin-l10-r10 testdata/centaur-post.md --ansi -w 40 --margin-left 10 --margin-right 10
 url-wrap-centaur.ansi.boring.w20.margin-l0-r0 testdata/centaur-post.md --ansi --boring -w 20 --margin-left 0 --margin-right 0
