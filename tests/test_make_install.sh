@@ -2,7 +2,7 @@
 # Exercise the actual Make install entrypoint entirely inside owned staging.
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
-unset prefix exec_prefix bindir PREFIX DESTDIR MAKEFLAGS MFLAGS MAKEOVERRIDES
+unset PREFIX BINDIR DESTDIR MAKEFLAGS MFLAGS MAKEOVERRIDES
 mkdir -p "$root/build"
 work=$(mktemp -d "$root/build/test-make-install.XXXXXX")
 trap 'rm -rf -- "$work"' EXIT
@@ -21,7 +21,7 @@ check_install() {
   stage="$work/stage $case_number"
   target="$stage$expected/cmdf"
   # No build helper is present: install must use the existing producer.
-  (umask 077; make --no-print-directory -C "$repo" install DESTDIR="$stage" "$@") \
+  (umask 077; DESTDIR="$stage" make --no-print-directory -C "$repo" install "$@") \
     > "$work/install-$case_number.log" 2>&1 || {
       cat "$work/install-$case_number.log" >&2; exit 1;
     }
@@ -31,18 +31,15 @@ check_install() {
   test "$("$target")" = 'installed fixture'
 }
 check_install /usr/local/bin
-check_install /usr/bin prefix=/usr
-check_install /opt/cmdf/bin prefix=/usr exec_prefix=/opt/cmdf
-check_install /custom/commands prefix=/usr exec_prefix=/opt/ignored bindir=/custom/commands
-check_install "/path with 'quotes'/commands" "bindir=/path with 'quotes'/commands"
-prefix=/environment check_install /environment/bin
-bindir=/environment/commands check_install /environment/commands
-bindir=/environment/commands check_install /command-line/commands bindir=/command-line/commands
-check_install /bin prefix=
-check_install /bin prefix=/usr exec_prefix=
-check_install '' bindir=
+check_install /usr/bin PREFIX=/usr
+check_install /custom/commands PREFIX=/usr BINDIR=/custom/commands
+check_install "/path with 'quotes'/commands" "BINDIR=/path with 'quotes'/commands"
+PREFIX=/environment check_install /environment/bin
+BINDIR=/environment/commands check_install /environment/commands
+PREFIX=/environment check_install /command-line/bin PREFIX=/command-line
+BINDIR=/environment/commands check_install /command-line/commands BINDIR=/command-line/commands
 rm "$source_binary"
-if make --no-print-directory -C "$repo" install DESTDIR="$work/missing" bindir=/bin \
+if make --no-print-directory -C "$repo" install DESTDIR="$work/missing" BINDIR=/bin \
     > "$work/missing.log" 2>&1; then
   printf 'make install accepted a missing build\n' >&2; exit 1;
 fi
