@@ -1383,6 +1383,7 @@ static int table_column_split_cost(table_filter *tf, mdf_renderer *renderer, siz
 
 typedef struct table_mem_sink {
     mdf_allocator *allocator;
+    int oom;
     char *buf;
     size_t len;
     size_t cap;
@@ -1526,6 +1527,7 @@ static int table_mem_write(void *userdata, const char *src, size_t len)
         return 0;
     }
     if (m->len + len + 1 < m->len) {
+        m->oom = 1;
         return -1;
     }
     if (m->len + len + 1 > m->cap) {
@@ -1535,6 +1537,7 @@ static int table_mem_write(void *userdata, const char *src, size_t len)
         }
         next = (char *)mdf_realloc_mem(m->allocator, m->buf, m->cap, cap);
         if (next == NULL) {
+            m->oom = 1;
             return -1;
         }
         m->buf = next;
@@ -1551,6 +1554,7 @@ static void table_mem_sink_init(table_mem_sink *mem, mdf_allocator *allocator)
     mem->allocator = allocator;
     mem->buf = NULL;
     mem->len = 0;
+    mem->oom = 0;
     mem->cap = 0;
 }
 
@@ -1559,6 +1563,7 @@ static void table_mem_sink_release(table_mem_sink *mem)
     mdf_free_mem(mem->allocator, mem->buf, mem->cap);
     mem->buf = NULL;
     mem->len = 0;
+    mem->oom = 0;
     mem->cap = 0;
 }
 
@@ -1804,6 +1809,10 @@ static int table_render_cell_markdown_to_ansi(mdf_impl *impl,
     if (st != MDF_OK || tmp == NULL) {
         return -1;
     }
+    if (tmp->set_word_buffer(tmp, impl->word_memory_limit, impl->disable_word_spooling) != MDF_OK) {
+        tmp->destroy(tmp);
+        return -1;
+    }
     ((mdf_impl *)tmp->impl)->table_cell_mode = 1;
     if (table_copy_cell_markdown(&impl->allocator, src, len, &cell_src, &cell_src_len) != 0) {
         tmp->destroy(tmp);
@@ -1827,6 +1836,11 @@ static int table_render_cell_markdown_to_ansi(mdf_impl *impl,
     }
     if (st == MDF_OK) {
         st = tmp->finish(tmp);
+    }
+    if (st == MDF_ERROR_IO && !mem->oom) {
+        impl->word_error = MDF_ERROR_IO;
+        strncpy(impl->error, tmp->error(tmp), sizeof(impl->error) - 1);
+        impl->error[sizeof(impl->error) - 1] = '\0';
     }
     tmp->destroy(tmp);
     mdf_free_mem(&impl->allocator, cell_src, cell_src_len + 1);
@@ -3552,7 +3566,7 @@ static mdf_status table_compute_ansi_widths(table_filter *tf, mdf_renderer *rend
         size_t break_min;
 
         if (table_render_cell_metrics(renderer, tf->header, tf->header_len, c, &widths[c], &preferred_mins[c], &break_min) != 0) {
-            return MDF_ERROR_NOMEM;
+            return impl->word_error != MDF_OK ? impl->word_error : MDF_ERROR_NOMEM;
         }
         break_mins[c] = break_min;
         for (i = 0; i < tf->rows_len; i++) {
@@ -3560,7 +3574,7 @@ static mdf_status table_compute_ansi_widths(table_filter *tf, mdf_renderer *rend
             size_t row_break_min;
 
             if (table_render_cell_metrics(renderer, tf->rows[i], tf->row_lens[i], c, &w, &min_w, &row_break_min) != 0) {
-                return MDF_ERROR_NOMEM;
+                return impl->word_error != MDF_OK ? impl->word_error : MDF_ERROR_NOMEM;
             }
             if (w > widths[c]) {
                 widths[c] = w;
@@ -3593,7 +3607,7 @@ static mdf_status table_compute_ansi_widths(table_filter *tf, mdf_renderer *rend
     table_fit_widths(widths, preferred_mins, tf->cols, avail_width, impl->opts.table_wire_mode);
     if (avail_width > 0 && table_total_width(widths, tf->cols, impl->opts.table_wire_mode) > (size_t)avail_width) {
         if (table_allocate_constrained_widths(tf, renderer, widths, natural, break_mins, tf->cols, avail_width) != 0) {
-            return MDF_ERROR_NOMEM;
+            return impl->word_error != MDF_OK ? impl->word_error : MDF_ERROR_NOMEM;
         }
     }
     return MDF_OK;
@@ -3605,7 +3619,7 @@ static void table_finish_ansi_state(mdf_impl *impl)
     impl->quote_wrap_active = 0;
     impl->quote_prefix_indent = 0;
     ansi_reset_line_output_state(impl);
-    impl->ansi_word_len = 0;
+    mdf_word_clear(&impl->word);
     impl->pending_breaks = 1;
 }
 
@@ -3880,7 +3894,7 @@ static mdf_status table_render_html_row_open(table_filter *tf, mdf_renderer *ren
         impl->opts.boring = save_boring;
         return MDF_ERROR_IO;
     }
-    if (impl->ansi_col > 0 || impl->ansi_pending_space || impl->ansi_word_len > 0) {
+    if (impl->ansi_col > 0 || impl->ansi_pending_space || impl->word.len > 0) {
         if (ansi_write_newline(impl, &bridge_sink) != 0) {
             impl->opts.width = save_width;
             impl->opts.osc8 = save_osc8;
@@ -3968,7 +3982,7 @@ static mdf_status table_render_html_row_finish(table_filter *tf, mdf_parser_impl
     impl->quote_wrap_active = 0;
     impl->quote_prefix_indent = 0;
     ansi_reset_line_output_state(impl);
-    impl->ansi_word_len = 0;
+    mdf_word_clear(&impl->word);
     impl->pending_breaks = 0;
     return MDF_OK;
 }

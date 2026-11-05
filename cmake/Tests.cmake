@@ -61,7 +61,9 @@ if(LIBMDF_BUILD_TESTS)
     libmdf_configure_c89_target(test_public_headers)
     if(LIBMDF_BUILD_HOST_TESTS)
       find_program(LIBMDF_CLANGD clangd REQUIRED)
-      set(editor_sources src/mdf.c include/libmdf.h build/debug/generated/include/libmdf/mdf.h)
+      # A compact implementation verifies the same C89 target and generated
+      # headers without clangd's per-token feature tests over a 4000-line file.
+      set(editor_sources src/word_storage.c include/libmdf.h build/debug/generated/include/libmdf/mdf.h)
       if(LIBMDF_BUILD_LUA_TESTS)
         list(APPEND editor_sources lua/libmdf_core.c)
       endif()
@@ -90,6 +92,16 @@ if(LIBMDF_BUILD_TESTS)
   libmdf_configure_development_runtime(test_contracts)
   add_test(NAME test_contracts COMMAND test_contracts)
   set_tests_properties(test_contracts PROPERTIES LABELS "unit;streaming;api" TIMEOUT 10)
+
+  find_package(Threads REQUIRED)
+  add_executable(test_word_storage tests/test_word_storage.c)
+  target_include_directories(test_word_storage PRIVATE "${LIBMDF_GENERATED_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_link_libraries(test_word_storage PRIVATE $<IF:$<BOOL:${LIBMDF_BUILD_STATIC}>,mdf_static,mdf_internal_test> Threads::Threads)
+  libmdf_configure_c89_target(test_word_storage)
+  target_compile_definitions(test_word_storage PRIVATE _POSIX_C_SOURCE=200809L)
+  libmdf_configure_development_runtime(test_word_storage)
+  add_test(NAME word_storage COMMAND test_word_storage)
+  set_tests_properties(word_storage PROPERTIES LABELS "unit;streaming;storage" TIMEOUT 30)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64"
      AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64")
     enable_language(CXX)
@@ -107,10 +119,14 @@ if(LIBMDF_BUILD_TESTS)
       endif()
     endforeach()
     find_program(LIBMDF_VALGRIND valgrind REQUIRED)
+    add_test(NAME memory_word_storage COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1
+      "$<TARGET_FILE:test_word_storage>" --memory)
+    set_tests_properties(memory_word_storage PROPERTIES LABELS "memory;storage" TIMEOUT 120)
     foreach(check public_api contracts c89)
       set(memory_args)
-      if(check STREQUAL "contracts")
-        set(memory_args --under-valgrind)
+      if(check STREQUAL "contracts" OR check STREQUAL "public_api")
+        set(memory_args --memory)
       endif()
       add_test(NAME memory_${check} COMMAND "${LIBMDF_VALGRIND}"
         --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1
@@ -383,6 +399,10 @@ if(LIBMDF_BUILD_TESTS)
   add_test(NAME cmake_option_matrix COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmake_options.sh)
   add_test(NAME cmdf_install_boundary COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmdf_install.sh)
   set_tests_properties(cmdf_install_boundary PROPERTIES LABELS "unit;packaging" TIMEOUT 90)
+  add_test(NAME static_build_entrypoint COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_static_build.sh)
+  set_tests_properties(static_build_entrypoint PROPERTIES LABELS "unit;lifecycle" TIMEOUT 15)
+  add_test(NAME make_install_entrypoint COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_make_install.sh)
+  set_tests_properties(make_install_entrypoint PROPERTIES LABELS "unit;lifecycle;packaging" TIMEOUT 15)
   set_tests_properties(cmake_option_matrix PROPERTIES
     LABELS "unit;packaging"
     TIMEOUT 60

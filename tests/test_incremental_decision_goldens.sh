@@ -25,6 +25,12 @@ while read -r name input args; do
     *.ansi.*) ;;
     *) continue ;;
   esac
+  # This runner compares source-parser render/feed decisions. Explicit token
+  # sequences have separate NEWLINE semantics; test_contracts exercises their
+  # whole/byte-fragmented input and sink/trace identity under each storage mode.
+  case " $args " in
+    *' --text-tokens '*) continue ;;
+  esac
   if [ ! -f "$GOLDEN_DIR/$name.golden" ] || [ ! -f "$ROOT/$input" ]; then
     printf '%s\n' "missing ANSI decision-parity fixture: $name" >&2
     exit 1

@@ -1556,6 +1556,26 @@ static int mdf_pager_draw_highlighted(const mdf_pager_view *view, const mdf_page
     return position >= end || mdf_pager_write(view->bytes.data + position, end - position) == 0 ? 0 : -1;
 }
 
+static size_t mdf_pager_line_columns(const mdf_pager_view *view, size_t start, size_t end)
+{
+    size_t columns;
+    size_t length;
+    unsigned long codepoint;
+
+    columns = 0;
+    while (start < end) {
+        if (view->bytes.data[start] == '\033') {
+            start = mdf_pager_escape_end(view->bytes.data, end, start);
+            continue;
+        }
+        length = utf8_decode_codepoint(view->bytes.data + start, end - start, &codepoint);
+        if (length == 0) break;
+        columns += utf8_display_width(codepoint);
+        start += length;
+    }
+    return columns;
+}
+
 static int mdf_pager_draw(const mdf_pager_view *view, const char *path, const mdf_options *opts,
                           const mdf_pager_search *search, int columns, int rows, size_t top)
 {
@@ -1583,21 +1603,29 @@ static int mdf_pager_draw(const mdf_pager_view *view, const char *path, const md
     content_rows = (size_t)(rows - 1);
     max_top = view->line_count > content_rows ? view->line_count - content_rows : 0;
     percent = max_top == 0 || top >= max_top ? 100 : (int)((top * 100) / max_top);
-    if (mdf_pager_write("\033[H\033[2J", strlen("\033[H\033[2J")) != 0) return -1;
+    if (mdf_pager_write("\033[H", strlen("\033[H")) != 0) return -1;
     for (row = 0; row < content_rows; row++) {
         size_t index;
         size_t start;
         size_t end;
+        size_t line_columns;
 
-        if (mdf_pager_write("\033[K", strlen("\033[K")) != 0) return -1;
+        line_columns = 0;
         index = top + row;
         if (index < view->line_count) {
             start = view->lines[index];
             end = index + 1 < view->line_count ? view->lines[index + 1] : view->bytes.len;
             if (end > start && view->bytes.data[end - 1] == '\n') end--;
+            line_columns = mdf_pager_line_columns(view, start, end);
             if (end > start && mdf_pager_draw_highlighted(view, search, start, end) != 0) return -1;
         }
-        if (mdf_pager_write("\033[0m\r\n", strlen("\033[0m\r\n")) != 0) return -1;
+        if (mdf_pager_write("\033[0m", strlen("\033[0m")) != 0) return -1;
+        /* EL at the right edge would erase the last glyph while autowrap is
+         * pending. Full rows have no remainder; reset colors before clearing
+         * short/empty rows so old highlighting cannot color their blank tail. */
+        if (line_columns < (size_t)columns &&
+            mdf_pager_write("\033[K", strlen("\033[K")) != 0) return -1;
+        if (mdf_pager_write("\r\n", strlen("\r\n")) != 0) return -1;
     }
     mdf_pager_buffer_init(&status_path, opts);
     mdf_pager_buffer_init(&search_status, opts);
@@ -1679,7 +1707,9 @@ static int mdf_pager_draw(const mdf_pager_view *view, const char *path, const md
         mdf_pager_write_spaces(padding) != 0 ||
         mdf_pager_write(percent_status, percent_len) != 0 ||
         mdf_pager_write_spaces(right_margin) != 0 ||
-        mdf_pager_write("\033[K\033[0m", strlen("\033[K\033[0m")) != 0) {
+        /* Padding fills every status cell, including at width one. There is
+         * no remainder to erase, and EL here could erase the final cell. */
+        mdf_pager_write("\033[0m", strlen("\033[0m")) != 0) {
         result = -1;
         goto done;
     }

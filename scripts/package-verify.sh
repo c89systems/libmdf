@@ -18,7 +18,9 @@ awk '{print $2}' "$manifest" | sort > "$work/actual"
 cmp "$work/expected" "$work/actual"
 (cd "$dist" && sha256sum -c "$manifest")
 abi=$(sed -n 's/^set(LIBMDF_ABI_VERSION \([0-9]*\))$/\1/p' "$root/CMakeLists.txt")
-mapfile -t artifacts <<< "$expected"
+# Check CLI payloads before compiling SDK consumers. The already validated
+# sorted inventory puts cmdf first, so a missing CLI notice fails immediately.
+mapfile -t artifacts < "$work/expected"
 for artifact in "${artifacts[@]}"; do
   case "$artifact" in
     libmdf-"$version"-*-linux-*.tar.gz|libmdf-"$version"-*-apple-darwin.tar.gz) kind=sdk; target=${artifact#libmdf-$version-};;

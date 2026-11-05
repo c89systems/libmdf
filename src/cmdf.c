@@ -439,6 +439,7 @@ static int trace_emit(void *userdata, mdf_format format, const char *src, size_t
 static void usage(FILE *fp)
 {
     fprintf(fp, "cmdf %s\n", LIBMDF_VERSION);
+    fprintf(fp, "Copyright (C) 2026 C89 Systems AB https://c89.systems\n\n");
     fprintf(fp, "Usage: cmdf [flags] [input]\n\n");
     fprintf(fp, "Flags:\n");
     fprintf(fp, "  -h, --help                 Show help\n");

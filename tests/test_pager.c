@@ -252,17 +252,17 @@ static int capture_range_contains(const capture *out, const char *needle, size_t
     return 0;
 }
 
-/* A pager redraw starts with a clear and ends with the status-row terminator.
+/* A pager redraw homes the cursor and ends with the status-row terminator.
  * Accept only a complete frame containing the expected marker: a marker from
  * a live-search redraw must not be paired with a later redraw's terminator. */
 static int wait_for_redraw(int fd, capture *out, const char *marker)
 {
-    static const char redraw_start[] = "\033[H\033[2J";
+    static const char redraw_start[] = "\033[H";
     /* The default pager theme starts its inverse status row with this exact
-     * sequence.  Content rows can end in the same clear/reset sequence as
+     * sequence.  Content rows can end in the same reset sequence as
      * the status row, so use the status-row start to locate the final one. */
     static const char status_start[] = "\033[7m\033[1;32m";
-    static const char redraw_end[] = "\033[K\033[0m";
+    static const char redraw_end[] = "\033[0m";
     struct timespec started;
     size_t scan;
 
@@ -1368,7 +1368,7 @@ static int require_full_status_bar(const capture *out, const char *path)
     size_t position;
 
     prefix = "\033[7m\033[1;32m ";
-    suffix = "0% \033[K\033[0m";
+    suffix = "0% \033[0m";
     path_len = strlen(path);
     shown_path_len = path_len > 36 ? 36 : path_len;
     position = 0;
@@ -1413,6 +1413,93 @@ static void sleep_ms(long milliseconds)
     delay.tv_nsec = (milliseconds % 1000L) * 1000000L;
     while (nanosleep(&delay, &delay) != 0 && errno == EINTR) {
     }
+}
+
+static int require_overwrite_frame(const capture *out, const char *body)
+{
+    /* Erasing the display or a whole row before painting recreates the flash.
+     * Exact row suffixes also catch EL erasing a full-width row's last cell. */
+    if (out->data == NULL || count_occurrences(out->data, "\033[H") != 1 ||
+        strstr(out->data, "\033[J") != NULL || strstr(out->data, "\033[0J") != NULL ||
+        strstr(out->data, "\033[1J") != NULL || strstr(out->data, "\033[2J") != NULL ||
+        strstr(out->data, "\033[2K") != NULL || require_contains(out, body) != 0) return -1;
+    return 0;
+}
+
+static int check_overwrite_redraws(const char *cmdf)
+{
+    static const char source[] = "0123456789ABCDEF\nshort\n\nABCDEFGHIJKLMNO\ntail\n";
+    static const char initial[] = "\033[H0123456789ABCDEF\033[0m\r\nshort\033[0m\033[K\r\n\033[0m\033[K\r\n";
+    static const char down[] = "\033[Hshort\033[0m\033[K\r\n\033[0m\033[K\r\nABCDEFGHIJKLMNO\033[0m\033[K\r\n";
+    static const char last[] = "\033[H\033[0m\033[K\r\nABCDEFGHIJKLMNO\033[0m\033[K\r\ntail\033[0m\033[K\r\n";
+    static const char expanded[] = "\033[H0123456789ABCDEF\033[0m\r\nshort\033[0m\033[K\r\n\033[0m\033[K\r\nABCDEFGHIJKLMNO\033[0m\033[K\r\ntail\033[0m\033[K\r\n\033[0m\033[K\r\n\033[0m\033[K\r\n";
+    static const char *const bodies[] = {initial, down, initial, last, initial};
+    static const char *const markers[] = {"short", "short", "short", "tail", "short"};
+    static const char keys[] = "jkGg";
+    char temporary[sizeof(LIBMDF_TEST_SCRATCH_DIR) + 128];
+    char path[sizeof(LIBMDF_TEST_SCRATCH_DIR) + 132];
+    struct winsize size;
+    capture out;
+    pid_t pid;
+    int fd;
+    int master;
+    int direct;
+    int result;
+    int exited;
+    size_t step;
+
+    memset(&out, 0, sizeof(out));
+    temporary[0] = '\0';
+    path[0] = '\0';
+    pid = -1;
+    master = -1;
+    result = -1;
+    if (snprintf(temporary, sizeof(temporary), LIBMDF_TEST_SCRATCH_DIR "/libmdf-pager-overwrite-XXXXXX") >= (int)sizeof(temporary)) goto done;
+    fd = mkstemp(temporary);
+    if (fd < 0) goto done;
+    if (write_all(fd, source, sizeof(source) - 1) != 0) { close(fd); goto done; }
+    if (close(fd) != 0 || snprintf(path, sizeof(path), "%s.txt", temporary) >= (int)sizeof(path) ||
+        rename(temporary, path) != 0) goto done;
+    for (direct = 0; direct <= 1; direct++) {
+        pid = start_pager_at_size(cmdf, path, direct, 0, 0, 16, 4, &master);
+        if (pid < 0) goto done;
+        for (step = 0; step < sizeof(bodies) / sizeof(bodies[0]); step++) {
+            if (step > 0) {
+                clear_capture(&out);
+                if (write_all(master, keys + step - 1, 1) != 0) goto done;
+            }
+            if (wait_for_redraw(master, &out, markers[step]) != 0 ||
+                require_overwrite_frame(&out, bodies[step]) != 0) goto done;
+        }
+        clear_capture(&out);
+        memset(&size, 0, sizeof(size));
+        size.ws_col = 16;
+        size.ws_row = 8;
+        if (ioctl(master, TIOCSWINSZ, &size) != 0 || kill(pid, SIGWINCH) != 0 ||
+            wait_for_redraw(master, &out, "tail") != 0 || require_overwrite_frame(&out, expanded) != 0) goto done;
+        clear_capture(&out);
+        size.ws_col = 1;
+        if (ioctl(master, TIOCSWINSZ, &size) != 0 || kill(pid, SIGWINCH) != 0 ||
+            wait_for_redraw(master, &out, "0") != 0 ||
+            require_overwrite_frame(&out, "\033[H0\033[0m\r\n1\033[0m\r\n") != 0 ||
+            require_contains(&out, "\033[7m\033[1;32m0\033[0m") != 0) goto done;
+        if (write_all(master, "q", 1) != 0) goto done;
+        exited = wait_for_exit(pid);
+        pid = -1;
+        if (exited != 0 || !terminal_is_cooked(master)) goto done;
+        close(master);
+        master = -1;
+        clear_capture(&out);
+    }
+    result = 0;
+done:
+    if (result != 0 && out.len > 0) fwrite(out.data, 1, out.len, stderr);
+    if (pid > 0) { kill(pid, SIGTERM); (void)waitpid(pid, NULL, 0); }
+    if (master >= 0) close(master);
+    if (temporary[0] != '\0') unlink(temporary);
+    if (path[0] != '\0') unlink(path);
+    free(out.data);
+    return result;
 }
 
 int main(int argc, char **argv)
@@ -1505,6 +1592,8 @@ int main(int argc, char **argv)
     if (snprintf(missing_path, sizeof(missing_path), LIBMDF_TEST_SCRATCH_DIR "/libmdf-pager-missing-XXXXXX") >= (int)sizeof(missing_path) ||
         (fd = mkstemp(missing_path)) < 0 || close(fd) != 0 || unlink(missing_path) != 0) goto done;
 
+    stage = "overwrite redraw protocol";
+    if (check_overwrite_redraws(argv[1]) != 0) goto done;
     for (mode = 0; mode < (argc == 4 ? 2 : 4); mode++) {
         stage = "explicit CLI pager text/markdown format, ordinary and incremental";
         pid = start_selected_pager(argv[1], mode & 1 ? text_path : markdown_path,
@@ -1583,7 +1672,7 @@ int main(int argc, char **argv)
             !terminal_is_cooked(master)) goto done;
         if (phase == 2 || phase == 4 || phase == 5) {
             if (require_contains(&out, "\033[?1049h") != 0 || require_contains(&out, "\033[?1049l") != 0 ||
-                strstr(out.data, "\033[H\033[2J") != NULL) goto done;
+                strstr(out.data, "\033[H") != NULL) goto done;
         } else if (out.len != 0) goto done;
         close(cancel_fd);
         close(master);
@@ -1594,7 +1683,7 @@ int main(int argc, char **argv)
     stage = "text startup";
     pid = start_pager(argv[1], text_path, 1, 0, 0, &master);
     if (pid < 0 || wait_for_marker(master, &out, "# raw heading") != 0 ||
-        wait_for_marker(master, &out, "\033[K\033[0m") != 0 ||
+        wait_for_marker(master, &out, "\033[7m\033[1;32m") != 0 ||
         require_contains(&out, "# raw heading") != 0 ||
         require_contains(&out, "\033[7m\033[1;32m ") != 0 ||
         require_full_status_bar(&out, text_path) != 0 ||
@@ -1956,8 +2045,9 @@ int main(int argc, char **argv)
     clear_capture(&out);
 
     stage = "styled narrow reflow";
-    pid = start_pager_at_size(argv[1], styled_path, 1, 0, 0, 80, 10, &master);
-    if (pid < 0 || wait_for_redraw(master, &out, "foo ") != 0) goto done;
+    pid = start_pager_at_size(argv[1], styled_path, 1, 0, 0, 16, 10, &master);
+    if (pid < 0 || wait_for_redraw(master, &out, "foo ") != 0 ||
+        require_contains(&out, "baz\033[0m\033[K\r\n") != 0) goto done;
     clear_capture(&out);
     memset(&resized, 0, sizeof(resized));
     resized.ws_col = 2;
@@ -1989,7 +2079,7 @@ int main(int argc, char **argv)
     if (wait_for_redraw(master, &out, "line-52") != 0 ||
         clock_gettime(CLOCK_MONOTONIC, &resize_finished) != 0 ||
         elapsed_milliseconds(&resize_started, &resize_finished) < 250 ||
-        count_occurrences(out.data, "\033[H\033[2J") != 1 ||
+        count_occurrences(out.data, "\033[H") != 1 ||
         require_contains(&out, "line-52") != 0 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
@@ -2039,8 +2129,8 @@ int main(int argc, char **argv)
      * immediately before the first view is built.  Resize from that observed
      * protocol point instead of racing a fixed burst against slow sanitizers. */
     if (ioctl(master, TIOCSWINSZ, &resized) != 0 || kill(pid, SIGWINCH) != 0) goto done;
-    if (wait_for_redraw(master, &out, "\033[K01234567890123456789\033[0m\r\n") != 0 ||
-        require_contains(&out, "\033[K01234567890123456789\033[0m\r\n") != 0 ||
+    if (wait_for_redraw(master, &out, "\033[H01234567890123456789\033[0m\r\n") != 0 ||
+        require_contains(&out, "\033[H01234567890123456789\033[0m\r\n") != 0 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
     clear_capture(&out);
@@ -2053,7 +2143,7 @@ int main(int argc, char **argv)
     resized.ws_col = 1;
     resized.ws_row = 10;
     if (ioctl(master, TIOCSWINSZ, &resized) != 0 || kill(pid, SIGWINCH) != 0 ||
-        wait_for_marker(master, &out, "\033[H\033[2J") != 0 || out.len > 16384 ||
+        wait_for_marker(master, &out, "\033[H") != 0 || out.len > 16384 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
     clear_capture(&out);
@@ -2066,7 +2156,7 @@ int main(int argc, char **argv)
     resized.ws_col = 1;
     resized.ws_row = 10;
     if (ioctl(master, TIOCSWINSZ, &resized) != 0 || kill(pid, SIGWINCH) != 0 ||
-        wait_for_marker(master, &out, "\033[H\033[2J") != 0 || out.len > 16384 ||
+        wait_for_marker(master, &out, "\033[H") != 0 || out.len > 16384 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
     clear_capture(&out);
@@ -2080,7 +2170,7 @@ int main(int argc, char **argv)
     resized.ws_row = 10;
     if (ioctl(master, TIOCSWINSZ, &resized) != 0 || kill(pid, SIGWINCH) != 0 ||
         wait_for_marker(master, &out,
-                        "\033[K\346\227\245\346\234\254\033[0m\r\n\033[K\350\252\236\346\227\245\033[0m\r\n\033[K\346\234\254\350\252\236") != 0 ||
+                        "\346\227\245\346\234\254\033[0m\r\n\350\252\236\346\227\245\033[0m\r\n\346\234\254\350\252\236") != 0 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
     clear_capture(&out);
@@ -2089,7 +2179,7 @@ int main(int argc, char **argv)
     pid = start_pager_at_size(argv[1], wide_tab_path, 1, 0, 0, 1, 10, &master);
     if (pid < 0 ||
         wait_for_redraw(master, &out,
-                        "\033[K\346\227\245\033[0m\r\n\033[K \033[0m\r\n") != 0 ||
+                        "\346\227\245\033[0m\r\n \033[0m\r\n") != 0 ||
         write_all(master, "q", 1) != 0 || wait_for_exit(pid) != 0) goto done;
     close(master);
     clear_capture(&out);

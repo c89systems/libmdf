@@ -1057,9 +1057,10 @@ static int test_osc8_auto_detection(void)
     return fails;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     int fails;
+    int memory_checks;
     mdf_options opts;
     counting_allocator allocs;
     failing_allocator fail_allocs;
@@ -1095,6 +1096,12 @@ int main(void)
     int font_paths_alias;
     static const unsigned char deck_font_bytes[] = {1, 2, 3};
 
+    memory_checks = 0;
+    if (argc == 2 && strcmp(argv[1], "--memory") == 0) memory_checks = 1;
+    else if (argc != 1) {
+        fprintf(stderr, "usage: test_public_api [--memory]\n");
+        return 2;
+    }
     fails = test_html_font_weight_ranges();
     fails += test_osc8_auto_detection();
     inst = NULL;
@@ -6618,18 +6625,21 @@ int main(void)
             static const char row_mode_prefix[] = "| h |\n|---|\n";
             static const char row_mode_row[] = "| \xE4\xB8\xAD\xE6\x96\x87\xE5\xAD\x97 |  \n";
             static const size_t chunk_sizes[] = {4096, 8};
+            const size_t rows = memory_checks ? 65536 / strlen(row_mode_row) + 1 : 25000;
             char *row_mode_table;
             size_t row_mode_table_len;
             size_t row;
             size_t case_index;
             mdf_sink row_mode_sink;
 
-            row_mode_table_len = strlen(row_mode_prefix) + 25000 * strlen(row_mode_row);
+            row_mode_table_len = strlen(row_mode_prefix) + rows * strlen(row_mode_row);
+            fails += expect(row_mode_table_len > 65536,
+                            "row-mode fixture exceeds the complete-table retention bound");
             row_mode_table = (char *)malloc(row_mode_table_len);
             fails += expect(row_mode_table != NULL, "incremental row-mode utf8 table test allocates");
             if (row_mode_table != NULL) {
                 memcpy(row_mode_table, row_mode_prefix, strlen(row_mode_prefix));
-                for (row = 0; row < 25000; row++) {
+                for (row = 0; row < rows; row++) {
                     memcpy(row_mode_table + strlen(row_mode_prefix) + row * strlen(row_mode_row),
                            row_mode_row, strlen(row_mode_row));
                 }

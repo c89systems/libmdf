@@ -134,6 +134,12 @@ typedef struct mdf_allocator {
     void (*free)(void *userdata, void *ptr, size_t size);
 } mdf_allocator;
 
+/** Default retained word bytes before optional file backing. */
+#define MDF_WORD_BUFFER_DEFAULT_BYTES 4096u
+/** Largest configurable retained word buffer. */
+#define MDF_WORD_BUFFER_MAX_BYTES 65536u
+/** Hard maximum bytes retained in one word's temporary file. */
+#define MDF_WORD_SPOOL_MAX_BYTES 1048576u
 /** Optional reusable-memory retention limits. Zero selects library defaults. */
 typedef struct mdf_memory_options {
     /** Total retained workspace capacity allowed after a render. */
@@ -381,7 +387,12 @@ typedef struct mdf_sink {
  * ```mdf-bar-chart, ```mdf-vertical-bar-chart, and ```mdf-tile-chart.
  */
 typedef enum mdf_token_type {
-    /** Ordinary inline text. */
+    /**
+     * Inline Markdown, including emphasis, links and backslash escapes.
+     * Successive TEXT tokens may form one word or syntax construct; token
+     * boundaries do not force emission. Use MDF_TOKEN_LITERAL_TEXT to bypass
+     * Markdown.
+     */
     MDF_TOKEN_TEXT = 0,
     /** Inline whitespace. */
     MDF_TOKEN_SPACE = 1,
@@ -421,7 +432,9 @@ typedef enum mdf_token_type {
      * fence info string. Prefer Markdown chart fences over constructing this
      * token manually; the chart-kind numeric values are not public API.
      */
-    MDF_TOKEN_CHART_BLOCK = 17
+    MDF_TOKEN_CHART_BLOCK = 17,
+    /** Literal inline text; uses normal word layout without Markdown syntax. */
+    MDF_TOKEN_LITERAL_TEXT = 18
 } mdf_token_type;
 
 /** Parser/renderer token passed to write_token implementations. */
@@ -479,16 +492,25 @@ typedef struct mdf_theme_palette {
     char table_wire[MDF_THEME_FOREGROUND_SIZE];
 } mdf_theme_palette;
 
+/** Renderer handle with the receiver methods defined below. */
 typedef struct mdf mdf;
 
 /** Receiver vtable slots reserved for ABI-compatible future expansion. */
 #define MDF_RECEIVER_RESERVED_SLOTS 4
 
+/**
+ * Renderer receiver. Create with mdf_create and release with destroy.
+ * Bind a sink before streaming methods; render_cstr returns its own allocated
+ * string instead. Public methods are synchronous. Source callbacks may change
+ * geometry; sink/trace callbacks may not mutate the active renderer.
+ */
 struct mdf {
     /**
-     * Render one already-decided token to the bound sink. This is an advanced
-     * streaming surface; use render for ordinary Markdown input. Deck
-     * renderers reject it. set_sink must succeed first.
+     * Consume one parser token through the bound sink. TEXT still interprets
+     * inline Markdown and retains unfinished words or syntax across calls.
+     * Use write_literal for literal text, or render for Markdown source input.
+     * End manual-token input with finish. Deck renderers reject this surface.
+     * set_sink must succeed first.
      */
     mdf_status (*write_token)(mdf *self, const mdf_token *token);
     /** Finish manual token streaming through the bound sink and release its session state. */
@@ -570,6 +592,12 @@ struct mdf {
     /** Page a finite source using this ANSI receiver's options; see mdf_pager_source. */
     mdf_status (*pager_source)(mdf *self, const char *name, mdf_source *source,
                                mdf_pager_format format, const mdf_pager_control *control);
+    /** Configure per-word memory and optional file backing; see mdf_set_word_buffer. */
+    mdf_status (*set_word_buffer)(mdf *self, size_t memory_limit, int disable_spooling);
+    /** Write a literal fragment to the bound sink; see mdf_write_literal. */
+    mdf_status (*write_literal)(mdf *self, const char *data, size_t len);
+    /** Escape Markdown syntax into an allocated string; see mdf_escape_markdown. */
+    mdf_status (*escape_markdown)(mdf *self, const char *text, char **out);
 };
 
 /**
@@ -585,7 +613,7 @@ void mdf_options_init(mdf_options *opts);
  * Create an ANSI, HTML, or HTML deck renderer. opts may be NULL for defaults;
  * out must be non-NULL and is set to NULL on failure. On success, the caller
  * owns *out and must release it through its destroy method. Bind an output
- * sink through mdf_set_sink before using receiver rendering methods. ANSI
+ * sink through mdf_set_sink before using receiver streaming methods. ANSI
  * escape policy and automatic width are resolved here, using opts->output_fd,
  * not the later sink binding. OFF strips input terminal escapes before parsing
  * and on manual-token output. Invalid ansi_mode values return MDF_ERROR_INVALID.
@@ -601,10 +629,9 @@ mdf_status mdf_create(mdf_format format, const mdf_options *opts, mdf **out);
  * identical callback and userdata leaves the current rendering state intact.
  * This does not redetect ANSI policy or width; recreate the renderer when the
  * destination type changes. Escape-free ANSI renderers need no terminal cleanup.
- * The explicit-sink
- * free functions below borrow their sink only for their call and never replace
- * this receiver binding. A binding cannot be changed while an active output
- * operation is invoking source, sink, or trace callbacks.
+ * The explicit-sink free functions below borrow their sink for their call and
+ * never replace this receiver binding. A binding cannot be changed while an
+ * active output operation is invoking source, sink, or trace callbacks.
  */
 mdf_status mdf_set_sink(mdf *renderer, const mdf_sink *sink);
 /**
@@ -625,6 +652,24 @@ mdf_status mdf_set_sink(mdf *renderer, const mdf_sink *sink);
  * the failed document requires reset and caller-owned replay.
  */
 mdf_status mdf_set_width(mdf *renderer, int width);
+/**
+ * Configure storage for each undecided ANSI/HTML word.
+ * memory_limit is a byte count; zero selects 4096, and values above 65536 are
+ * rejected. Spooling is enabled when disable_spooling is zero. A word exceeding
+ * the memory limit then uses an automatically deleted temporary file, capped
+ * at 1048576 bytes. Excess bytes are discarded until the normal decision
+ * boundary. With spooling disabled, only the memory-limit prefix is retained.
+ * Replays use bounded reads through the normal emitter; filling storage never
+ * forces a rendering decision or changes wrapping. Nested emphasis uses the
+ * same per-word limits and emits decided words without retaining the span.
+ * After a nested word has emitted, unmatched opening markers are not restored
+ * at the outer boundary or EOF; backslash-escape markers to make them literal.
+ * Files are removed on word completion, reset, failure and destruction.
+ * Filesystem failures return MDF_ERROR_IO. Configure between documents or
+ * while no inline decision is pending; callbacks, pending words and deck
+ * renderers reject changes.
+ */
+mdf_status mdf_set_word_buffer(mdf *renderer, size_t memory_limit, int disable_spooling);
 /**
  * Atomically change the total width and ANSI margins of an existing renderer.
  * Margins must be nonnegative; ANSI content width must remain at least three
@@ -663,6 +708,29 @@ mdf_status mdf_reset(mdf *renderer);
  * not bind that sink and cannot interrupt another active output operation.
  */
 mdf_status mdf_write_token(mdf *renderer, const mdf_token *token, mdf_sink *sink);
+/**
+ * Write literal text through the manual-token renderer and an explicit sink.
+ * Equivalent to MDF_TOKEN_LITERAL_TEXT: Markdown punctuation, escapes, entities
+ * and links are not interpreted. Existing wrapping, margins, quote/heading
+ * roles, destination policy and word storage apply. Successive fragments can
+ * form one word; a fragment boundary never forces output. Embedded newlines
+ * use normal NEWLINE token layout. Empty fragments are no-ops; data may be
+ * NULL only when len is zero. The sink is borrowed for this call.
+ * Requires closed inline Markdown syntax; unresolved syntax is rejected
+ * without emission. Deck renderers do not support manual token input.
+ */
+mdf_status mdf_write_literal(mdf *renderer, const char *data, size_t len, mdf_sink *sink);
+/**
+ * Allocate NUL-terminated Markdown with ASCII punctuation backslash-escaped.
+ * For example, **bold** becomes \\*\\*bold\\*\\*. Existing backslashes are
+ * escaped too. UTF-8, whitespace, indentation and line breaks are preserved;
+ * ordinary Markdown layout rules still apply. This helper materializes its
+ * result; use write_literal to render literal fragments directly instead.
+ * On success release *out through renderer->string_free. On failure *out is
+ * NULL. text must be NUL-terminated; renderer supplies the string allocator.
+ * This operation does not render, emit, flush or alter pending input.
+ */
+mdf_status mdf_escape_markdown(mdf *renderer, const char *text, char **out);
 /**
  * Finish manual token rendering through an explicit sink borrowed for this
  * call only; it does not bind that sink and cannot interrupt an active output
@@ -704,9 +772,9 @@ mdf_status mdf_flush(mdf *renderer, mdf_sink *sink);
 /**
  * End an incremental document exactly once through an explicit sink borrowed
  * for this call that does not replace any receiver binding. It resolves
- * retained Markdown
- * under ordinary EOF rules and emits the renderer's final closure. Later feed,
- * flush, or finish_document calls fail until mdf_begin_document succeeds.
+ * retained Markdown under ordinary EOF rules and emits the renderer's final
+ * closure. Later feed, flush, or finish_document calls fail until
+ * mdf_begin_document succeeds.
  */
 mdf_status mdf_finish_document(mdf *renderer, mdf_sink *sink);
 /**
@@ -828,9 +896,9 @@ int mdf_terminal_width(int fd, int fallback);
  * insensitive .md extension selects Markdown rendering; all other inputs are
  * shown as ordinary text. Markdown is rerendered after a settled SIGWINCH
  * resize (250 ms debounce). It supports less-style navigation and
- * case-insensitive slash search with n/N match traversal. render_options selects ANSI renderer options,
- * except write_trace, which is rejected because pager terminal writes cannot
- * participate in renderer emission tracing;
+ * case-insensitive slash search with n/N match traversal. render_options
+ * selects ANSI renderer options, except write_trace, which is rejected because
+ * pager terminal writes cannot participate in renderer emission tracing;
  * the pager always uses the current terminal width for its Markdown view.
  * MDF_ANSI_AUTO enables styling here because the pager is interactive, even
  * though its internal rendering sink is a callback. MDF_ANSI_OFF suppresses

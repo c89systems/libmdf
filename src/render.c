@@ -2,7 +2,8 @@
 
 int render_token_is_text(mdf_token_type t)
 {
-    return t == MDF_TOKEN_TEXT || t == MDF_TOKEN_SPACE || t == MDF_TOKEN_CODE_TEXT || t == MDF_TOKEN_CHART_BLOCK;
+    return t == MDF_TOKEN_TEXT || t == MDF_TOKEN_SPACE || t == MDF_TOKEN_CODE_TEXT ||
+           t == MDF_TOKEN_CHART_BLOCK || t == MDF_TOKEN_LITERAL_TEXT;
 }
 
 mdf_status mdf_renderer_fail_session(mdf_renderer *self, mdf_status st, const char *msg)
@@ -50,6 +51,7 @@ int mdf_token_has_missing_text(const mdf_token *token)
 
 void mdf_impl_mark_oom(mdf_impl *impl)
 {
+    if (impl->word_error == MDF_ERROR_IO) return;
     strncpy(impl->error, "out of memory", sizeof(impl->error) - 1);
     impl->error[sizeof(impl->error) - 1] = '\0';
 }
@@ -219,6 +221,8 @@ mdf_status mdf_renderer_finish_internal(mdf_renderer *self, mdf_sink *sink)
     if (st != MDF_OK) {
         return st;
     }
+    if (impl->word_error != MDF_OK)
+        return mdf_renderer_fail_from_impl(self, impl, "word storage failed");
     mdf_renderer_reset_session_state(self);
     return MDF_OK;
 }

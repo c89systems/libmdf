@@ -1039,6 +1039,12 @@ int main(int argc, char **argv)
     fails += expect(WIFEXITED(result.status) && WEXITSTATUS(result.status) == 0,
                     "cmdf help exits successfully");
     fails += expect(result.buf != NULL &&
+                    strncmp(result.buf, "cmdf ", 5) == 0 &&
+                    strchr(result.buf, '\n') != NULL &&
+                    strstr(result.buf, "\nCopyright (C) 2026 C89 Systems AB https://c89.systems\n\n"
+                                       "Usage: cmdf [flags] [input]\n\n") == strchr(result.buf, '\n'),
+                    "cmdf help places copyright after version and a blank line before usage");
+    fails += expect(result.buf != NULL &&
                     strstr(result.buf, "--deck") != NULL &&
                     strstr(result.buf, "--transition MODE") != NULL &&
                     strstr(result.buf, "--slide-numbers") != NULL &&

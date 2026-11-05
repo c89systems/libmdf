@@ -2029,9 +2029,14 @@ int main(void)
                     "runtime geometry consumes an ABI-4 reserve slot without shifting old members");
     fails += expect(renderer->get_theme_palette != NULL &&
                     offsetof(mdf, pager_file) == offsetof(mdf, get_theme_palette) + sizeof(renderer->get_theme_palette) &&
-                    offsetof(mdf, pager_source) == offsetof(mdf, pager_file) + sizeof(renderer->pager_file) &&
-                    sizeof(mdf) == offsetof(mdf, pager_source) + sizeof(renderer->pager_source),
+                    offsetof(mdf, pager_source) == offsetof(mdf, pager_file) + sizeof(renderer->pager_file),
                     "pager methods append after the released receiver and palette method");
+    fails += expect(renderer->set_word_buffer != NULL && renderer->write_literal != NULL && renderer->escape_markdown != NULL &&
+                    offsetof(mdf, set_word_buffer) == offsetof(mdf, pager_source) + sizeof(renderer->pager_source) &&
+                    offsetof(mdf, write_literal) == offsetof(mdf, set_word_buffer) + sizeof(renderer->set_word_buffer) &&
+                    offsetof(mdf, escape_markdown) == offsetof(mdf, write_literal) + sizeof(renderer->write_literal) &&
+                    sizeof(mdf) == offsetof(mdf, escape_markdown) + sizeof(renderer->escape_markdown),
+                    "word and literal methods append without shifting released receiver members");
     for (reserved_index = 0; reserved_index < MDF_RECEIVER_RESERVED_SLOTS; reserved_index++) {
         fails += expect(renderer->reserved[reserved_index] == NULL,
                         "single-handle api leaves reserved receiver slots null");

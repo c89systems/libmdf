@@ -31,6 +31,13 @@ Allowed decision buffers:
 
 * A current word or styled word while waiting for the boundary that proves it can
   be emitted.
+  Word memory defaults to 4 KiB and is configurable up to 64 KiB. The explicitly
+  authorized overflow policy is file backing, capped at 1 MiB per pending word;
+  after that cap discard additional bytes until the ordinary decision boundary.
+  Disabling spooling instead retains only the configured in-memory prefix.
+  Replay file-backed words through bounded reads and the same layout/emitter,
+  then close the file. Storage limits never authorize speculative output or a
+  different wrapping policy. Cleanup also covers reset, failure and destroy.
 * The minimum inline delimiter/link/code/entity state needed to decide the
   syntax.
 * Table buffers required by the configured table mode:
@@ -113,6 +120,13 @@ accumulating compatibility shims.
 
 When parity and local inferred behavior disagree, parity wins unless the user
 explicitly changes the contract.
+
+Nested emphasis follows the explicitly authorized word-boundary contract:
+emit decided words without retaining the complete nested span. After a nested
+word has been emitted, an unmatched opening marker is not restored at the outer
+boundary or EOF. An escaped marker remains literal (for example, `\_bar`).
+This recovery rule overrides Go where its output differs. Storage limits apply
+per word, independently of nested-span length and input fragmentation.
 
 The explicit zero-right-margin URL contract overrides Go's hard wrapping:
 visible terminal URLs remain byte-contiguous and use terminal autowrap,

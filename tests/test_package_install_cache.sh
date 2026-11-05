@@ -45,6 +45,7 @@ for notice in LICENSE OFL.txt; do
     printf 'CLI verification accepted missing %s\n' "$notice" >&2; exit 1;
   fi
   grep -Fq "Missing mandatory CLI payload: share/doc/cmdf/$notice" "$work/notice-$notice.log"
+  test ! -d "$source/build/package-verify/binary/libmdf-$version-x86_64-linux-gnu.tar.gz/consumers"
 done
 cp "$work/valid-cli.tar.gz" "$work/dist/$cli.tar.gz"
 "$source/scripts/package_checksums.sh" binary > "$work/restored-checksums.log"

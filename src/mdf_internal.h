@@ -2,8 +2,10 @@
 #define LIBMDF_INTERNAL_H
 
 #include "libmdf/mdf.h"
+#include "word_storage.h"
 
 typedef mdf mdf_renderer;
+int mdf_markdown_escapable_char(char c);
 
 #define MDF_INCREMENTAL_IDLE 0
 #define MDF_INCREMENTAL_ACTIVE 1
@@ -111,6 +113,10 @@ typedef struct mdf_impl {
     int emit_fixed_mode;
     int emit_owns_buf;
     int emit_workspace_owned;
+    size_t word_memory_limit;
+    int disable_word_spooling;
+    /* A reader failure survives completion/clearing of its pending word. */
+    mdf_status word_error;
     int in_paragraph;
     int in_pre;
     int html_open;
@@ -190,10 +196,9 @@ typedef struct mdf_impl {
     char ansi_prev_char;
     int ansi_punct_quote_pending;
     int ansi_uri_scheme_pending;
-    char *ansi_word;
-    size_t ansi_word_len;
+    int ansi_escape_pending;
+    mdf_word_storage word;
     size_t ansi_word_cols;
-    size_t ansi_word_cap;
     int ansi_flushing_word;
     char *pre_code_buf;
     size_t pre_code_len;
@@ -268,9 +273,7 @@ typedef struct mdf_impl {
     int ansi_pending_code_outer_paren_pending;
     int ansi_pending_code_heading_style_suspended;
     int ansi_pending_code_heading_style_pending_prefix;
-    char *inline_emph;
-    size_t inline_emph_len;
-    size_t inline_emph_cap;
+    mdf_word_storage emph_word;
     char inline_emph_delim;
     int inline_emph_count;
     int inline_emph_close_count;

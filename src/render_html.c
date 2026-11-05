@@ -2924,11 +2924,11 @@ static int html_should_flush_ansi_word_after_text(const mdf_impl *impl, const md
            impl->inline_text_len == 0 &&
            impl->inline_url_len == 0 &&
            impl->inline_code_len == 0 &&
-           impl->inline_emph_len == 0 &&
+           impl->emph_word.len == 0 &&
            impl->inline_entity_len == 0 &&
            impl->pending_fallback_url_len == 0 &&
            !impl->pending_fallback_exact &&
-           impl->ansi_word_len > 0;
+           impl->word.len > 0;
 }
 
 static int html_pending_line_is_quote_prefix_only(const html_state *state)
@@ -3038,7 +3038,8 @@ int html_bridge_run_ansi_newline(mdf_renderer *self, mdf_sink *sink)
 
     impl = (mdf_impl *)self->impl;
     html_bridge_scope_begin(self, sink, &bridge);
-    if (ansi_write_newline(impl, &bridge.sink) != 0) {
+    if ((impl->ansi_escape_pending && ansi_inline_flush_literal(impl, &bridge.sink) != 0) ||
+        ansi_write_newline(impl, &bridge.sink) != 0) {
         html_bridge_scope_end(&bridge);
         return -1;
     }

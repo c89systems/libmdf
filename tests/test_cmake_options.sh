@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BASE="$ROOT/build/test-cmake-options"
+rm -rf -- "$BASE"
 
 unset CC CFLAGS CPPFLAGS LDFLAGS
 
@@ -101,6 +102,9 @@ verify_install_tree() {
   shift
   shift
   build="$BASE/$name/build"
+  case "$name" in
+    static-only|multiarch-libdir|multi-component-include) build="$BASE/static-producer";;
+  esac
   install="$BASE/$name/install"
   consumer="$BASE/$name/consumer"
   pkg="$BASE/$name/pkg"
@@ -111,6 +115,8 @@ verify_install_tree() {
   cmake -S "$ROOT" -B "$build" -G Ninja -DLIBMDF_BUILD_HOST_TESTS=OFF \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchains/x86_64-linux-gnu.cmake" \
     -DCMAKE_INSTALL_PREFIX="$install" \
+    -DCMAKE_INSTALL_LIBDIR="${pcdir%/pkgconfig}" \
+    -DCMAKE_INSTALL_INCLUDEDIR="$includedir" \
     -DLIBMDF_BUILD_BINARY=OFF \
     -DLIBMDF_BUILD_TESTS=OFF \
     -DLIBMDF_BUILD_EXAMPLES=OFF \
@@ -155,7 +161,9 @@ verify_install_tree() {
 
 verify_absolute_pkg_config() {
   name=$1
-  build="$BASE/$name/build"
+  # Layout changes affect installation metadata, not library object code.
+  # Reconfigure the static producer while keeping each installed tree isolated.
+  build="$BASE/static-producer"
   install="$BASE/$name/install"
   abs_lib="$BASE/$name/absolute-lib"
   pcdir="$abs_lib/pkgconfig"
@@ -169,6 +177,7 @@ verify_absolute_pkg_config() {
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/cmake/toolchains/x86_64-linux-gnu.cmake" \
     -DCMAKE_INSTALL_PREFIX="$install" \
     -DCMAKE_INSTALL_LIBDIR="$abs_lib" \
+    -DCMAKE_INSTALL_INCLUDEDIR=include \
     -DLIBMDF_BUILD_STATIC=ON \
     -DLIBMDF_BUILD_SHARED=OFF \
     -DLIBMDF_BUILD_BINARY=OFF \

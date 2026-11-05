@@ -155,6 +155,17 @@ and RPATH refer to the local Bootlin collection. To install the CLI, use
 `make install` or configure `LIBMDF_CMDF_STATIC_RUNTIME=ON` together with
 `LIBMDF_INSTALL_BINARY=ON`. That executable is fully static and relocatable.
 
+`make install` accepts `PREFIX` (default `/usr/local`), `BINDIR` (default
+`$(PREFIX)/bin`), and `DESTDIR` for staging. Set them in the environment or on
+the Make command line. It copies the already-built CLI to
+`$(DESTDIR)$(BINDIR)/cmdf` without rebuilding it.
+
+```sh
+PREFIX="$HOME/.local" make install
+BINDIR="$HOME/bin" make install
+make install PREFIX=/usr DESTDIR="$PWD/stage"
+```
+
 ## pkg-config
 
 The SDK also ships relocatable pkg-config metadata. On Linux, use it with the
@@ -288,6 +299,67 @@ Important options:
 - `allocator`, `emission_buffer`, `memory`: custom memory and emission-buffer
   control.
 
+## Literal text and escaping
+
+`renderer->write_literal(renderer, data, len)` bypasses Markdown syntax while
+using the manual-token renderer's word boundaries, wrapping, margins, quotes
+and theme. It also accepts `MDF_TOKEN_LITERAL_TEXT` through `write_token`.
+Bind a sink first; use ordinary structural tokens to open and close quotes or
+headings, then `finish` for EOF. Successive fragments may form one word:
+
+```c
+renderer->write_literal(renderer, "**bo", 4);  /* no word decision yet */
+renderer->write_literal(renderer, "ld** ", 5); /* emits literal **bold** */
+renderer->finish(renderer);
+```
+
+Literal fragments cannot interrupt unresolved inline Markdown syntax. They
+leave punctuation, backslashes, entities and link syntax visible. Newlines use
+the normal NEWLINE-token layout. The free function `mdf_write_literal` takes an
+explicit sink. Both ANSI and HTML output support this API.
+
+To produce Markdown for a later render instead, use
+`renderer->escape_markdown(renderer, text, &escaped)`, then release the result
+with `renderer->string_free`. It backslash-escapes ASCII punctuation, including
+existing backslashes: `**bold**` becomes `\*\*bold\*\*`. UTF-8 and whitespace
+are copied unchanged; Markdown indentation, line-break and paragraph layout
+rules still apply. This helper allocates its complete result and does not
+render, flush or change pending input.
+
+Lua exposes `mdf.escape_markdown(text)`, `handle:escape_markdown(text)`, and
+`handle:write_literal(fragment)` with the same behavior.
+
+An undecided ordinary or emphasis word retains up to **4 KiB in memory** by
+default. Larger words use an automatically deleted temporary file containing
+at most **1 MiB**. Filling either limit never forces a rendering decision.
+Once a real boundary or EOF resolves the word, file-backed input replays through
+bounded reads and normal decision emissions, preserving wrapping and styles.
+After the file cap is reached, further bytes of that word are discarded.
+Temporary-file creation or I/O failure returns `MDF_ERROR_IO`.
+
+Nested emphasis emits decided words at word boundaries, so its storage limits
+apply to each word rather than the complete span. Once nested words have been
+emitted, a missing closing marker ends the style at the outer boundary or EOF;
+the unmatched opener is not reinserted. For example, `*foo _bar baz*` renders as
+`foo bar baz`. Use `*foo \_bar baz*` to request the literal `foo _bar baz`.
+
+Configure an idle renderer with
+`renderer->set_word_buffer(renderer, memory_bytes, disable_spooling)`:
+zero selects 4096 bytes, and the largest accepted memory limit is 65536 bytes.
+With spooling disabled, a word retains only its memory-limit prefix and drops
+excess bytes until its normal boundary. For example:
+
+```c
+renderer->set_word_buffer(renderer, 8192, 0); /* spool beyond 8 KiB */
+renderer->set_word_buffer(renderer, 4096, 1); /* truncate beyond 4 KiB */
+```
+
+Lua handles and document streams provide `:set_word_buffer(bytes, disabled)`.
+Files close on word completion, reset, rendering failure and destruction.
+These are pending-word limits; inline syntax decisions, table modes and the
+per-instance emission buffer retain their separate contracts. A fixed emission
+buffer must still fit each individual decision emission.
+
 ## Incremental documents
 
 For an event-loop or another producer that supplies Markdown fragments, keep
@@ -362,7 +434,7 @@ parser state; escape-free renderers discard state without terminal cleanup.
 Reset and sink replacement are rejected while a synchronous `render` call is
 active. A source callback may change geometry for later output. Sink and trace
 callbacks cannot change geometry, reset, or move a live render to a different
-sink. libmdf never retains input for replay. If terminal cleanup on the old
+sink. libmdf does not retain completed document input for reflow. If terminal cleanup on the old
 sink fails during replacement, the renderer still discards state and binds the
 new sink; replay remains the caller's responsibility.
 
@@ -379,11 +451,13 @@ These limits count retained decision data, not total allocated memory.
 The incremental lifecycle supports ANSI and HTML documents; HTML callers must
 set an explicit title before the first feed because automatic title detection
 is a one-shot source feature.
-HTML deck renderers remain whole-source only.
+HTML decks accept synchronous source rendering, with one slide buffered at a
+time; manual tokens and incremental feeds are unsupported. See the
+[deck guide](docs/html-slide-deck-mode.md).
 
-The shared library uses SONAME ABI version `7`, advanced from released ABI 6
-because the pager entry points now accept a cancellation-control argument.
-Lua facade and `cmdf.lua` changes do not themselves require a C ABI bump.
+The shared-library ABI is versioned independently of the release version;
+`LIBMDF_ABI_VERSION` in `CMakeLists.txt` sets its SONAME version. Lua facade and
+`cmdf.lua` changes do not themselves require a C ABI bump.
 
 For HTML, `mdf_set_html_title(renderer, title)` can set an optional document
 title after `mdf_create` and before rendering starts. Passing `NULL` clears the
@@ -461,8 +535,8 @@ Chart output is theme-aware in both ANSI and HTML. Labels, values, percentages,
 bars, and tile segments use colors from the active theme when styling is enabled.
 Escape-free ANSI charts retain their Unicode shapes and calculated values.
 ANSI chart rows are emitted through the same decision-emission surface as other
-ANSI output, and
-HTML preserves the active theme colors by consuming the styled ANSI emissions.
+ANSI output, and HTML preserves the active theme colors by consuming the styled
+ANSI emissions.
 
 Supported chart types:
 
@@ -577,13 +651,15 @@ The Go `mdf` implementation is the behavioral reference for ANSI streaming.
 Zero-right-margin URL layout intentionally differs: native tests pin contiguous
 URI bytes and following cursor layout, while corpus checks compare fragmented
 C output and emissions against whole-source C rendering for URI-bearing ANSI
-documents. Other cases retain Go as the comparison oracle. Deliberate,
-documented exceptions are limited to narrow URI wrapping (libmdf keeps `://`
-atomic rather than rendering a scheme followed by a wrapped `//host`),
+documents. The nested-emphasis recovery rule described above also takes
+precedence over Go and is pinned by native sink/trace tests. Other cases retain
+Go as the comparison oracle. The remaining documented exceptions cover narrow
+URI wrapping (libmdf keeps `://` atomic rather than rendering a scheme followed
+by a wrapped `//host`),
 escaped pipes inside table code spans, and correct Markdown link-label handling
 where Go is known to be wrong. The link-label exception
 keeps styled labels inside their OSC8 hyperlink and follows CommonMark for
-unequal emphasis delimiters. Every exception is listed in
+unequal emphasis delimiters. These remaining exceptions are listed in
 `testdata/goldens/libmdf/PARITY_EXCLUSIONS.txt` and protected by matching
 libmdf goldens; ANSI/trace entries require styled and boring exact outputs at
 each excluded width, and HTML entries require exact HTML outputs.
@@ -632,6 +708,7 @@ Flags:
     --ansi auto|on|off       Escape policy; default auto
 -b, --boring
 -p, --pager
+    --pager-format auto|text|markdown
 -o, --output PATH
 -t, --theme NAME
 -T, --title TITLE
@@ -671,7 +748,8 @@ containing sequence number, format, byte length, and base64 data.
 source read through `feed` and non-EOF `flush`, then calls `finish_document` at
 EOF. Incremental HTML requires `--title`: automatic title detection is a
 one-shot source operation and cannot precede the first streamed emission.
-Deck output remains whole-source only. The driver is useful with the simulator
+Deck output uses synchronous source rendering instead. The driver is useful
+with the simulator
 to exercise the additive lifecycle; it does not add nonblocking-FD or
 output-queue behavior. With `--pager`, cmdf first reaches EOF and renders the
 named Markdown file through the incremental receiver into the pager's finite
@@ -683,11 +761,13 @@ therefore not a live output queue.
 `--pager` requires a named input file and terminal stdin/stdout. It uses the
 alternate screen, restores the terminal on `q` or `Esc`, and provides `j`/`k`,
 arrow up/down, Page Up/Page Down, Home/End, and Ctrl-U/Ctrl-D navigation. Its
-bottom bar uses inverted video with the selected ANSI theme and shows the filename plus percentage
-viewed. Press `/` to search case-insensitively; matching text is highlighted as
+bottom bar uses inverted video with the selected ANSI theme and shows the
+filename plus percentage viewed. Press `/` to search case-insensitively;
+matching text is highlighted as
 the query is entered, and `n`/`N` move to the next/previous match. `q` or `Esc`
-leaves search mode without leaving the pager. Markdown views rerender only after SIGWINCH has been quiet for at least
-250 ms; rapid resize events are coalesced. Pager mode cannot be combined with
+leaves search mode without leaving the pager. Markdown views rerender only after
+SIGWINCH has been quiet for at least 250 ms; rapid resize events are coalesced.
+Pager mode cannot be combined with
 HTML/deck output, `--output`, write tracing, or input simulation. It can be
 combined with `--incremental`; the pager starts after that document reaches
 EOD and rerenders its named Markdown source after a settled resize.
@@ -699,7 +779,7 @@ within words split across display wraps. `auto` keeps extension-based selection;
 `markdown` renders Markdown regardless of filename. The pager reads a finite
 snapshot through EOF; it does not follow appended log data.
 
-Embedded C callers can use the ANSI receiver's appended `pager_file` and
+Embedded C callers can use the ANSI receiver's `pager_file` and
 `pager_source` methods, or `mdf_pager_file`/`mdf_pager_source` with render options.
 Every call accepts a final optional `const mdf_pager_control *`; pass `NULL`
 when cancellation is unnecessary. For example, with an application-owned
@@ -722,9 +802,7 @@ navigation; a nonzero result requests cancellation. Idle waits are capped at
 blocking source callback or terminal write must return before cancellation can
 finish. Cancellation restores terminal and signal state and returns
 `MDF_CANCELLED` without raising a signal. Receiver methods use independent pager
-workspace and leave the receiver usable afterward. These pager signature
-changes advance the shared-library ABI from 6 to 7; C callers must supply the
-new final argument.
+workspace and leave the receiver usable afterward.
 
 `--c89` applies the [C89 Systems Lights Out](https://c89.systems/lights-out/)
 page design: a faint oversized background mark, sticky branded header with
@@ -819,7 +897,8 @@ The comprehensive UX fixture lives at
 `testdata/deck-corpus/comprehensive.md`. A local preview can be generated with:
 
 ```sh
-cmdf --deck --slide-numbers -x fade -o deck.html testdata/deck-corpus/comprehensive.md
+mkdir -p build
+cmdf --deck --slide-numbers -x fade -o build/deck.html testdata/deck-corpus/comprehensive.md
 ```
 
 ## Lua
@@ -1018,6 +1097,7 @@ width = N (default 0; terminal destination width or 80, positive overrides)
 margin_left = N
 margin_right = N
 theme = NAME
+c89 = true
 html_content_width_ch = N
 html_title = TITLE
 deck_transition = "fade" | "cross" | "hard"
@@ -1074,7 +1154,8 @@ from Lua. `mdf.theme_names()`, `mdf.theme_exists(name)`,
 `mdf.status_string(status)` expose their corresponding read-only library
 queries. Handle objects expose `set_sink`, `set_width`, `set_geometry`, `reset`,
 `set_html_title`, `render`, `render_stream`, `write_token`, `finish`, `error`,
-`feed`, `flush`, `finish_document`, `begin_document`, and `close`. `render`
+`feed`, `flush`, `finish_document`, `begin_document`, `set_word_buffer`,
+`write_literal`, `escape_markdown`, and `close`. `render`
 returns a string and needs no sink; the other output receiver methods use the
 callback previously supplied to `set_sink`. After `finish_document`, call
 `begin_document` before feeding another incremental document. Bound sink and
@@ -1104,6 +1185,24 @@ open in a new tab/window with opener protection.
 
 Run `make help` for the authoritative local command list.
 
+For a new Linux development checkout, run `make tools-native` before the first
+Debug build to prepare its pinned toolchains and AFL++.
+
+Run `make build-debug` before using clangd, and again after `make clean`. This
+normal build prepares generated headers, the installed-SDK Lua facade and
+`build/debug/compile_commands.json`, which `.clangd` discovers automatically.
+Each file uses its owning CMake target's language and compile flags: C89 for
+the library and C99 for the Lua binding. Public headers have their own C89
+compile commands. The native `editor_clangd` check verifies normal discovery
+for implementations and public headers; it includes the Lua implementation
+when `LIBMDF_BUILD_LUA_TESTS` is enabled.
+
+Keep API declarations and hover comments synchronized in
+`include/libmdf/mdf.h` and `include/libmdf/mdf.h.in`. CMake generates the
+installed header from the template with the build's version. The
+`public_header_documentation_sync` test checks that all three agree except
+for version macros.
+
 Common commands:
 
 ```sh
@@ -1124,6 +1223,9 @@ make release
 Hardening targets use the Bootlin-built development executables directly. Valgrind
 is a host analysis tool; it checks the selected Bootlin runtime rather than
 substituting a host-built sanitizer configuration.
+The native suite retains the full layout, fragmentation and capacity matrices.
+Valgrind uses compact ownership/failure cases covering spool replay, the 1 MiB
+cap, allocation and I/O failures, adaptive table conversion, reset and destroy.
 
 ```sh
 make valgrind
@@ -1149,7 +1251,9 @@ replace the full parity matrix.
 through a test utility linked directly against the library. The golden matrix
 covers three broad Markdown fixtures across ANSI, asymmetric ANSI margins,
 HTML, and deck variants, plus OSC8 label fixtures at narrow and normal widths
-in styled and boring modes. Regenerate those snapshots deliberately with
+in styled and boring modes. Manual TEXT/NEWLINE token cases also cover escapes
+inside emphasis and plain suffix styling at tiny, default and memory-backed
+word-buffer limits. Regenerate those snapshots deliberately with
 `make golden-update` only when the rendered library output change is
 intentional.
 
@@ -1185,17 +1289,13 @@ owns verification.
 `CMAKE_BUILD_PARALLEL_LEVEL` defaults to 2; Make and CTest run operations serially.
 No pipeline step requires Python.
 
-Run `make build-debug` before using clangd, and again after `make clean`. This
-normal build prepares generated headers, the installed-SDK Lua facade and
-`build/debug/compile_commands.json`, which `.clangd` discovers automatically.
-Each file uses its owning CMake target's language and compile flags, including
-C89 for the library and C99 for the Lua binding. The native suite checks that
-discovery for implementations and public headers with the workstation's clangd.
-Public headers have their own C89 compile commands. The editor check includes
-the Lua implementation only when `LIBMDF_BUILD_LUA_TESTS` is enabled.
-
-Toolchain files and runtime discovery never provision tools. Prepare them explicitly
-with `make tools-native` or `make tools-cross`. Linux uses the pinned complete
+`make build` prepares the pinned x86_64 musl toolchain before configuring its
+static CLI, reusing the collection when already available. `make tools-native`
+explicitly prepares both native GNU and musl collections plus AFL++; use
+`make tools-cross` for the complete declared target matrix.
+Toolchain files and runtime discovery never provision tools. Direct CMake and
+other build entrypoints require their selected tools to be prepared first.
+Linux uses the pinned complete
 Bootlin collections; Darwin cross builds use the prepared osxcross SDK and pinned
 host MIG helper. `CPKT_TOOLCHAIN_CACHE` and `CPKT_DEPENDENCY_CACHE` overrides use
 this checkout's owned `build/` or `.cache/` paths, or the declared global cpkt cache
@@ -1208,9 +1308,8 @@ default; dependency archives use `~/.cache/cpkt/deps/`. Clang/LLVM and the
 developer-prepared osxcross/Apple SDK remain workstation prerequisites.
 The declared global cache and installed workstation prerequisites survive
 `make clean`. Repo-local cache overrides are disposable. Cleanup removes the entire
-local
-`build/`, `dist/` and `.cache/`, including hidden entries and local tools. Each
-checkout owns its generated state; another checkout's sources, tools, build state
+local `build/`, `dist/` and `.cache/`, including hidden entries and local tools.
+Each checkout owns its generated state; another checkout's sources, tools, build state
 or caches cannot serve as shared prerequisites, even through overrides or symlinks.
 
 `make test` forces the native suite. `make check-native`, `make valgrind`,

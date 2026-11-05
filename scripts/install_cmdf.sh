@@ -3,9 +3,10 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PREFIX=${PREFIX:-/usr/local}
+BINDIR=${BINDIR:-"$PREFIX/bin"}
 DESTDIR=${DESTDIR:-}
 SRC="$ROOT/build/cmdf-static/cmdf"
-DST="$DESTDIR$PREFIX/bin/cmdf"
+DST="$DESTDIR$BINDIR/cmdf"
 
 if [ ! -x "$SRC" ]; then
   printf '%s\n' "cmdf has not been built for install; run make build first" >&2

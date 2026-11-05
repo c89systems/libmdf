@@ -399,6 +399,7 @@ int ansi_set_pending_list_marker_state(mdf_impl *impl, const char *text, size_t 
 static int ansi_token_starts_inline_text(mdf_token_type type)
 {
     return type == MDF_TOKEN_TEXT ||
+           type == MDF_TOKEN_LITERAL_TEXT ||
            type == MDF_TOKEN_SPACE ||
            type == MDF_TOKEN_CODE_TEXT;
 }

@@ -9,13 +9,14 @@ chart fences, links, entities, and thematic-break edge cases.
 
 Use this fixture for manual browser review and generated HTML smoke tests.
 Generated deck HTML should include the libmdf provenance comment after the
-doctype, open slide links in a new tab/window, and keep `deck.html` as a local
-work artifact.
+doctype and open slide links in a new tab/window. Keep previews under the
+checkout's generated `build/` directory.
 
 Expected local preview command:
 
 ```sh
-cmdf --deck --slide-numbers -x fade -o deck.html testdata/deck-corpus/comprehensive.md
+mkdir -p build
+cmdf --deck --slide-numbers -x fade -o build/deck.html testdata/deck-corpus/comprehensive.md
 ```
 
-`deck.html` is a generated work artifact and must not be committed.
+`make clean` removes this preview along with the other generated outputs.

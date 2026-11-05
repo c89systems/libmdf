@@ -1,4 +1,5 @@
 PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
 CMAKE_BUILD_PARALLEL_LEVEL ?= 2
 export CMAKE_BUILD_PARALLEL_LEVEL
 .NOTPARALLEL:
@@ -9,12 +10,12 @@ export CMAKE_BUILD_PARALLEL_LEVEL
 help:
 	@printf '%s\n' \
 	  'libmdf native lifecycle (all operations are serialized):' \
-	  '  make tools-native            Explicitly prepare pinned GNU/AFL++ tooling' \
+	  '  make tools-native            Explicitly prepare pinned GNU/musl/AFL++ tooling' \
 	  '  make tools-cross             Explicitly prepare the declared target tools' \
 	  '  make build                   Build the static native musl CLI' \
 	  '  make build-debug             Build native tests, Go parity tools and Lua facade' \
 	  '  make build-release           Build native Release libraries and static CLI' \
-	  '  make install                 Install static cmdf to DESTDIR/PREFIX/bin' \
+	  '  make install                 Install static cmdf using PREFIX/BINDIR/DESTDIR' \
 	  '  make test                    Force the native CTest suite' \
 	  '  make test-release            Test the canonical native Release build' \
 	  '  make check-native            Reuse unchanged native suite success' \
@@ -41,6 +42,7 @@ help:
 
 tools-native:
 	@scripts/cpkt-toolchains.sh ensure x86_64-linux-gnu
+	@scripts/cpkt-toolchains.sh ensure x86_64-linux-musl
 	@scripts/cpkt-aflpp.sh ensure
 
 tools-cross:
@@ -55,6 +57,8 @@ build-debug:
 build-release:
 	@scripts/build.sh x86_64-linux-gnu-release
 
+install: export PREFIX := $(PREFIX)
+install: export BINDIR := $(BINDIR)
 install:
 	@scripts/install_cmdf.sh
 

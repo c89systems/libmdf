@@ -124,6 +124,25 @@ for width in 30 80; do
       tests/golden-fixtures/terminal-wrapped-links.md --ansi --boring -w "$width" --margin-left "$left" --margin-right "$right"
   done
 done
+
+# Manual TEXT/NEWLINE input and storage limits are independent API dimensions.
+# Pin exact SGR bytes with tiny/default spools and a memory-backed control.
+for width in 80 8192; do
+  for style in styled boring; do
+    for word_buffer in 0 7 8192; do
+      set -- --ansi --text-tokens -w "$width" --word-buffer "$word_buffer"
+      if [ "$style" = boring ]; then set -- "$@" --boring; fi
+      emit_case "emphasis-suffix-storage.ansi.$style.w$width.word-$word_buffer" \
+        tests/golden-fixtures/emphasis-suffix-storage.md "$@"
+    done
+  done
+done
+for width in 12 80; do
+  emit_case "emphasis-token-boundaries.ansi.styled.w$width" \
+    tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens -w "$width"
+  emit_case "emphasis-token-boundaries.ansi.boring.w$width" \
+    tests/golden-fixtures/emphasis-token-boundaries.md --ansi --text-tokens --boring -w "$width"
+done
 emit_url_wrap_fixture url-wrap-centaur testdata/centaur-post.md
 emit_url_wrap_fixture url-wrap-frontmatter2 testdata/frontmatter2.md
 emit_url_wrap_fixture url-wrap-linkify testdata/future/linkify.md 40 80 100 120
