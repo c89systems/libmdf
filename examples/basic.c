@@ -1,3 +1,11 @@
+/**
+ * @file basic.c
+ * @brief Minimal C89 receiver example for a materialized Markdown render.
+ *
+ * Initializes options and releases the result with the same receiver that
+ * allocated it before destroying that receiver. For producer-to-consumer
+ * streaming, use the source/sink or incremental operations in <libmdf/mdf.h>.
+ */
 #include <libmdf/mdf.h>
 
 #include <stdio.h>

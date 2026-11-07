@@ -30,6 +30,7 @@ bash "$root/tests/test_shared_exports.sh"
 SCRIPT
 printf '#!/bin/sh\nexit 0\n' > "$work/source/tests/test_shared_exports.sh"
 printf 'set(LIBMDF_ABI_VERSION 5)\n' > "$work/source/CMakeLists.txt"
+printf '# readme-valid\n' > "$work/source/README.md"
 printf '# toolchain-valid\n' > "$work/source/cmake/toolchains/included.cmake"
 chmod +x "$work/source/scripts/"*.sh
 touch "$work/dist/libmdf-0.0.0-x86_64-linux-gnu.tar.gz" "$work/dist/cmdf-0.0.0-x86_64-linux-gnu.tar.gz" "$work/inventory/binary-CHECKSUMS"
@@ -38,6 +39,17 @@ cmake -S "$root/cmake/package-checks" -B "$work/build" -G Ninja \
   -DLIBMDF_PACKAGE_WORK_DIR="$work/inventory" -DLIBMDF_ARTIFACT_SCOPE=binary > "$work/configure.log"
 cmake --build "$work/build" --target verify > "$work/first.log"
 cmake --build "$work/build" --target verify > "$work/warm.log"
+[[ $(wc -l < "$work/dist/runs") == 1 ]]
+# Root README is an exact input, not a recursive pattern over generated trees.
+mkdir -p "$work/source/build/generated" "$work/source/dist/generated"
+ln -s absent "$work/source/build/generated/README.md"
+ln -s absent "$work/source/dist/generated/README.md"
+cmake -S "$root/cmake/package-checks" -B "$work/build" > "$work/generated-configure.log"
+cmake --build "$work/build" --target verify > "$work/generated-warm.log"
+[[ $(wc -l < "$work/dist/runs") == 1 ]]
+rm -- "$work/source/dist/generated/README.md"
+printf '# generated doc\n' > "$work/source/dist/generated/README.md"
+cmake --build "$work/build" --target verify > "$work/generated-changed.log"
 [[ $(wc -l < "$work/dist/runs") == 1 ]]
 sleep 1
 printf 'set(LIBMDF_ABI_VERSION 6)\n' > "$work/source/CMakeLists.txt"

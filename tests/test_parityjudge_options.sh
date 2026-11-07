@@ -52,6 +52,7 @@ run_case() {
     ansi_regressions)
       "$JUDGE" -mode ansi -compare-libmdf \
         -suite "$ROOT/testdata/parity-regressions" \
+        -exclude-cases "$CASE_EXCLUDES" \
         -chunks "1 4096" \
         -widths "20 100" \
         -themes all \

@@ -1,3 +1,12 @@
+/**
+ * @file libmdf_core.c
+ * @brief Lua 5.5 native boundary for the installed public libmdf C API.
+ *
+ * Owns native receivers and Lua callback references. Callback failures are
+ * retained until C rendering unwinds, then raised in Lua; active callbacks may
+ * not destroy their receiver. Lua strings and options stay referenced for the
+ * duration required by borrowed C pointers.
+ */
 #include <lua.h>
 #include <lauxlib.h>
 
@@ -97,7 +106,7 @@ static void lua_mdf_snapshot_options(lua_State *L, int index)
         "deck_transition", "slide_numbers", "deck_center_front_text", "table_buffer_mode",
         "table_wire_mode", "write_trace", "html_font", "disable_embedded_font", "font_uri",
         "font_regular_uri", "font_italic_uri", "dump_font", "dump_font_force", "font_path",
-        "font_regular_path", "font_italic_path", "should_cancel", NULL
+        "font_regular_path", "font_italic_path", "should_cancel", "cache_budget", NULL
     };
     static const char *const font_fields[] = {
         "family", "regular_format", "regular_data", "italic_format", "italic_data", NULL
@@ -2031,6 +2040,7 @@ static int lua_mdf_pager(lua_State *L)
     lua_mdf_failure failure = {0};
     lua_mdf_callback_ctx cancel_ctx = {0};
     mdf_pager_control control = {0};
+    mdf_pager_options pager_options = {0};
 
     luaL_checkstack(L, 16, "libmdf callbacks");
     path = lua_mdf_cstring(L, 1);
@@ -2063,6 +2073,14 @@ static int lua_mdf_pager(lua_State *L)
         }
         lua_pop(L, 1);
         lua_mdf_apply_options(L, 2, &opts, &trace_ctx, 0);
+        lua_getfield(L, 2, "cache_budget");
+        if (!lua_isnil(L, -1)) {
+            lua_Integer value = luaL_checkinteger(L, -1);
+            if (value < 0 || (lua_Unsigned)value > (size_t)-1 || (value != 0 && value < 65536))
+                return luaL_error(L, "cache_budget must be zero or at least 65536 bytes within size_t range");
+            pager_options.cache_budget = (size_t)value;
+        }
+        lua_pop(L, 1);
         lua_getfield(L, 2, "should_cancel");
         if (!lua_isnil(L, -1)) {
             luaL_checktype(L, -1, LUA_TFUNCTION);
@@ -2073,7 +2091,7 @@ static int lua_mdf_pager(lua_State *L)
             control.should_cancel = lua_mdf_pager_cancel;
         } else lua_pop(L, 1);
     }
-    st = mdf_pager_file(path, &opts, format, &control);
+    st = mdf_pager_file_with_options(path, &opts, format, &control, &pager_options);
     lua_mdf_raise_callback(L, &failure);
     if (st == MDF_CANCELLED) {
         lua_pushboolean(L, 0);
@@ -2185,6 +2203,7 @@ static void lua_mdf_set_status_constants(lua_State *L)
     lua_pushinteger(L, MDF_ERROR_NOMEM); lua_setfield(L, -2, "NOMEM");
     lua_pushinteger(L, MDF_ERROR_IO); lua_setfield(L, -2, "IO");
     lua_pushinteger(L, MDF_ERROR_PARSE); lua_setfield(L, -2, "PARSE");
+    lua_pushinteger(L, MDF_ERROR_TERMINAL_SIZE); lua_setfield(L, -2, "TERMINAL_SIZE");
     lua_setfield(L, -2, "status");
 }
 

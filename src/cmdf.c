@@ -1,3 +1,11 @@
+/**
+ * @file cmdf.c
+ * @brief cmdf command-line entry point and synchronous input/output adapters.
+ *
+ * Selects rendering or paging, validates options and applies destination-aware
+ * terminal policy. Markdown layout, document state and paging remain owned by
+ * libmdf; this adapter owns its opened files and reports public status codes.
+ */
 #include "libmdf/mdf.h"
 #include "mdf_internal.h"
 
@@ -17,8 +25,6 @@ typedef struct file_source {
     double delay_seconds;
     size_t reads;
 } file_source;
-
-static int has_markdown_extension(const char *path);
 
 static int sleep_seconds(double seconds)
 {
@@ -119,11 +125,6 @@ static mdf_status render_incremental_source(mdf *renderer,
 typedef struct file_sink {
     FILE *fp;
 } file_sink;
-
-typedef struct pager_incremental_sink {
-    mdf *renderer;
-    mdf_status status;
-} pager_incremental_sink;
 
 typedef struct trace_output {
     FILE *trace_fp;
@@ -246,121 +247,6 @@ static int file_write(void *userdata, const char *src, size_t len)
     return 0;
 }
 
-static int pager_incremental_sink_write(void *userdata, const char *src, size_t len)
-{
-    pager_incremental_sink *state;
-
-    state = (pager_incremental_sink *)userdata;
-    state->status = state->renderer->feed(state->renderer, src, len);
-    if (state->status == MDF_OK) {
-        state->status = state->renderer->flush(state->renderer);
-    }
-    return state->status == MDF_OK ? 0 : -1;
-}
-
-static mdf_status render_incremental_pager_file(void *userdata, const mdf_options *opts,
-                                                mdf_sink *sink)
-{
-    const char *path;
-    FILE *input;
-    struct stat input_st;
-    file_source file_data;
-    pager_incremental_sink incremental_sink;
-    mdf_source input_source;
-    mdf_sink sanitized_sink;
-    mdf *renderer;
-    mdf_status st;
-    int input_fd;
-    int close_failed;
-
-    path = (const char *)userdata;
-    input_fd = open(path, O_RDONLY | O_NONBLOCK);
-    if (input_fd < 0) {
-        return MDF_ERROR_IO;
-    }
-    if (fstat(input_fd, &input_st) != 0 || !S_ISREG(input_st.st_mode)) {
-        (void)close(input_fd);
-        return MDF_ERROR_INVALID;
-    }
-    input = fdopen(input_fd, "rb");
-    if (input == NULL) {
-        (void)close(input_fd);
-        return MDF_ERROR_IO;
-    }
-    memset(&file_data, 0, sizeof(file_data));
-    memset(&incremental_sink, 0, sizeof(incremental_sink));
-    file_data.fp = input;
-    input_source.userdata = &file_data;
-    input_source.read = file_read;
-    renderer = NULL;
-    {
-        mdf_options pager_opts;
-        pager_opts = *opts;
-        if (pager_opts.ansi_mode == MDF_ANSI_AUTO) pager_opts.ansi_mode = MDF_ANSI_ON;
-        st = mdf_create(MDF_FORMAT_ANSI, &pager_opts, &renderer);
-    }
-    if (st != MDF_OK) {
-        (void)fclose(input);
-        return st;
-    }
-    st = renderer->set_sink(renderer, sink);
-    if (st != MDF_OK) {
-        renderer->destroy(renderer);
-        (void)fclose(input);
-        return st;
-    }
-    incremental_sink.renderer = renderer;
-    incremental_sink.status = MDF_OK;
-    sanitized_sink.userdata = &incremental_sink;
-    sanitized_sink.write = pager_incremental_sink_write;
-    /* Sanitization is a bounded source-to-renderer transform. The pager owns
-     * the finite post-EOD ANSI view; cmdf never materializes Markdown input. */
-    st = mdf_pager_sanitize_markdown_source(&input_source, &sanitized_sink, opts);
-    close_failed = fclose(input) != 0;
-    if (st == MDF_OK) st = incremental_sink.status;
-    if (st == MDF_OK) st = renderer->finish_document(renderer);
-    if (st == MDF_OK && close_failed) st = MDF_ERROR_IO;
-    renderer->destroy(renderer);
-    return st;
-}
-
-static int run_incremental_pager_file(const char *path, const mdf_options *opts, mdf_pager_format pager_format)
-{
-    struct stat input_st;
-    mdf_status st;
-    int input_fd;
-
-    input_fd = open(path, O_RDONLY | O_NONBLOCK);
-    if (input_fd < 0) {
-        fprintf(stderr, "cmdf: open input %s: %s\n", path, strerror(errno));
-        return 1;
-    }
-    if (fstat(input_fd, &input_st) != 0 || !S_ISREG(input_st.st_mode)) {
-        (void)close(input_fd);
-        fprintf(stderr, "cmdf: --pager requires a named regular input file\n");
-        return 2;
-    }
-    if (close(input_fd) != 0) {
-        fprintf(stderr, "cmdf: close input: %s\n", strerror(errno));
-        return 1;
-    }
-    if (pager_format == MDF_PAGER_FORMAT_TEXT ||
-        (pager_format == MDF_PAGER_FORMAT_AUTO && !has_markdown_extension(path))) {
-        st = mdf_pager_file(path, opts, MDF_PAGER_FORMAT_TEXT, NULL);
-        if (st != MDF_OK) {
-            fprintf(stderr, "cmdf: pager: %s\n", mdf_status_string(st));
-            return 1;
-        }
-        return 0;
-    }
-    st = mdf_pager_ansi_rerendered(path, opts, render_incremental_pager_file, (void *)path);
-    if (st != MDF_OK) {
-        fprintf(stderr, "cmdf: pager: %s\n", mdf_status_string(st));
-        return 1;
-    }
-    return 0;
-}
-
 static int trace_write_base64(FILE *fp, const unsigned char *src, size_t len)
 {
     static const char base64_table[] =
@@ -452,6 +338,7 @@ static void usage(FILE *fp)
     fprintf(fp, "  -b, --boring               Boring ANSI output\n");
     fprintf(fp, "  -p, --pager                Page a named file interactively\n");
     fprintf(fp, "      --pager-format MODE    Pager input: auto|text|markdown (text hard-wraps)\n");
+    fprintf(fp, "      --pager-cache BYTES    Rendered content cache, 0=1 MiB (minimum 65536)\n");
     fprintf(fp, "  -o, --output PATH          Output file\n");
     fprintf(fp, "  -t, --theme NAME           Theme name\n");
     fprintf(fp, "  -T, --title TITLE          HTML document title\n");
@@ -663,17 +550,6 @@ static int has_html_extension(const char *path)
     return 0;
 }
 
-static int has_markdown_extension(const char *path)
-{
-    const char *dot;
-
-    if (path == NULL) return 0;
-    dot = strrchr(path, '.');
-    return dot != NULL && dot[0] == '.' &&
-           (dot[1] == 'm' || dot[1] == 'M') &&
-           (dot[2] == 'd' || dot[2] == 'D') && dot[3] == '\0';
-}
-
 int main(int argc, char **argv)
 {
     int opt;
@@ -717,6 +593,8 @@ int main(int argc, char **argv)
     int pager_requested;
     mdf_pager_format pager_format;
     int pager_format_seen;
+    int pager_cache_seen;
+    mdf_pager_options pager_options = {0};
     int output_fd;
     struct stat output_stat;
     static const struct option long_options[] = {
@@ -730,6 +608,7 @@ int main(int argc, char **argv)
         {"boring", no_argument, NULL, 'b'},
         {"pager", no_argument, NULL, 'p'},
         {"pager-format", required_argument, NULL, 1025},
+        {"pager-cache", required_argument, NULL, 1026},
         {"output", required_argument, NULL, 'o'},
         {"theme", required_argument, NULL, 't'},
         {"title", required_argument, NULL, 'T'},
@@ -805,6 +684,7 @@ int main(int argc, char **argv)
     pager_requested = 0;
     pager_format = MDF_PAGER_FORMAT_AUTO;
     pager_format_seen = 0;
+    pager_cache_seen = 0;
     while ((opt = getopt_long(argc, argv, "hVHbpo:t:T:w:8:S:x:", long_options, NULL)) != -1) {
         switch (opt) {
         case 'h':
@@ -840,6 +720,21 @@ int main(int argc, char **argv)
         case 'p':
             pager_requested = 1;
             break;
+        case 1026: {
+            char *end;
+            unsigned long value;
+
+            errno = 0;
+            value = strtoul(optarg, &end, 10);
+            if (errno != 0 || end == optarg || *end != '\0' || optarg[0] == '-' ||
+                value > (size_t)-1 || (value != 0 && value < 65536)) {
+                fprintf(stderr, "cmdf: --pager-cache requires 0 or at least 65536 bytes\n");
+                return 2;
+            }
+            pager_options.cache_budget = (size_t)value;
+            pager_cache_seen = 1;
+            break;
+        }
         case 1025:
             pager_format_seen = 1;
             if (strcmp(optarg, "auto") == 0) pager_format = MDF_PAGER_FORMAT_AUTO;
@@ -1126,6 +1021,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "cmdf: --pager-format requires --pager\n");
         return 2;
     }
+    if (pager_cache_seen && !pager_requested) {
+        fprintf(stderr, "cmdf: --pager-cache requires --pager\n");
+        return 2;
+    }
     if (pager_requested) {
         if (in_path == NULL) {
             fprintf(stderr, "cmdf: --pager requires a named input file\n");
@@ -1136,11 +1035,14 @@ int main(int argc, char **argv)
             fprintf(stderr, "cmdf: --pager is only supported with ANSI file input and no output, trace, or simulation options\n");
             return 2;
         }
-        if (incremental_enabled) {
-            return run_incremental_pager_file(in_path, &opts, pager_format);
-        }
-        st = mdf_pager_file(in_path, &opts, pager_format, NULL);
+        st = mdf_pager_file_with_options(in_path, &opts, pager_format, NULL, &pager_options);
         if (st != MDF_OK) {
+            struct stat input_st;
+
+            if (st == MDF_ERROR_INVALID && stat(in_path, &input_st) == 0 && !S_ISREG(input_st.st_mode)) {
+                fprintf(stderr, "cmdf: --pager requires a named regular input file\n");
+                return 2;
+            }
             fprintf(stderr, "cmdf: pager: %s\n", mdf_status_string(st));
             return 1;
         }

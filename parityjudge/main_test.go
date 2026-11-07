@@ -13,6 +13,38 @@ type failOnRead struct {
 	reads int
 }
 
+func TestLiteralNBSPCompatibility(t *testing.T) {
+	for _, mode := range []string{"ansi", "html"} {
+		for _, input := range []string{
+			"a\u00a0b\n", "xx a\u00a0b zz\n", "xx a b zz\n",
+			"**bold\u00a0pair** and *italic\u00a0pair*\n",
+			"`code\u00a0pair`\n", "> quoted\u00a0pair\n", "- listed\u00a0pair\n",
+		} {
+			for _, chunk := range []int{1, 2, 7, 4096} {
+				for _, width := range []int{12, 80} {
+					for _, trace := range []bool{false, true} {
+						if mode == "html" && trace {
+							continue
+						}
+						if err := compareLibmdfOne(mode, []byte(input), chunk, width, defaultParityOptions(), trace); err != nil {
+							t.Fatalf("mode=%s input=%q chunk=%d width=%d trace=%v: %v", mode, input, chunk, width, trace, err)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestNBSPControlRetainsOtherParityFailures(t *testing.T) {
+	// Unequal emphasis is an existing, unrelated Go divergence. Adding an NBSP
+	// must not turn the entire document into an unchecked Go-parity exclusion.
+	err := compareLibmdfOne("html", []byte("***foo**\n\na\u00a0b\n"), 1, 80, defaultParityOptions(), false)
+	if err == nil || !strings.Contains(err.Error(), "output mismatch") {
+		t.Fatalf("NBSP control must retain unrelated Go-parity failures: %v", err)
+	}
+}
+
 func TestTerminalURLFragmentCompatibility(t *testing.T) {
 	opts := defaultParityOptions()
 	for _, input := range []string{

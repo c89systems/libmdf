@@ -15,6 +15,8 @@ _mdf_html_font_resolve_dump_paths
 _mdf_html_jetbrains_mono_font
 _mdf_options_init
 _mdf_pager_file
+_mdf_pager_file_with_options
+_mdf_pager_seekable_source
 _mdf_pager_source
 _mdf_paths_alias
 _mdf_render

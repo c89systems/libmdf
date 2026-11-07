@@ -1,3 +1,11 @@
+/**
+ * @file html_fonts.c
+ * @brief Public built-in font descriptors, asset dumping and path validation.
+ *
+ * Built-in font bytes are immutable borrowed data. Explicit dump operations
+ * write selected assets after checking aliases and destination file types;
+ * callers retain ownership of supplied paths and output path buffers.
+ */
 #include "libmdf/mdf.h"
 #include "mdf_internal.h"
 

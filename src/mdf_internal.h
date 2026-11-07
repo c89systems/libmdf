@@ -197,6 +197,7 @@ typedef struct mdf_impl {
     int ansi_punct_quote_pending;
     int ansi_uri_scheme_pending;
     int ansi_escape_pending;
+    int ansi_literal_underscore_run;
     mdf_word_storage word;
     size_t ansi_word_cols;
     int ansi_flushing_word;
@@ -406,14 +407,6 @@ mdf_status mdf_renderer_write_token_internal(mdf_renderer *self, const mdf_token
 mdf_status mdf_renderer_finish_internal(mdf_renderer *self, mdf_sink *sink);
 mdf_status mdf_renderer_begin_internal(mdf_renderer *self, mdf_sink *sink);
 mdf_status mdf_parse_stream(mdf_parser *self, mdf_source *source, mdf_renderer *renderer, mdf_sink *sink);
-/* Private cmdf pager hook for a named Markdown source that must be rendered
- * through the incremental receiver again after a terminal resize. The callback
- * writes completed ANSI into sink using the supplied width-adjusted options. */
-typedef mdf_status (*mdf_pager_ansi_rerender_fn)(void *userdata,
-                                                 const mdf_options *render_options,
-                                                 mdf_sink *sink);
-mdf_status mdf_pager_ansi_rerendered(const char *name, const mdf_options *render_options,
-                                     mdf_pager_ansi_rerender_fn rerender, void *userdata);
 /* Sanitize untrusted Markdown before it is rendered into ANSI that a pager
  * may subsequently treat as styled terminal output. */
 mdf_status mdf_pager_sanitize_markdown_source(mdf_source *source, mdf_sink *sink,

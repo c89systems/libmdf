@@ -1,0 +1,105 @@
+# HTML, fonts and branding
+
+`cmdf --html INPUT.md -o OUTPUT.html` creates an HTML document. The C API uses
+`MDF_FORMAT_HTML`; Lua uses `{ format = "html" }`. For presentations, use the
+[slide-deck guide](html-slide-deck-mode.md).
+
+## C89 Systems pages
+
+`--c89` applies the [C89 Systems Lights Out](https://c89.systems/lights-out/)
+page design: a faint oversized background mark, sticky branded header with
+section navigation, company footer, and the reference page's `one-dark` palette
+(unless a theme is explicitly selected). It requires HTML document output;
+ANSI and decks reject it. Content width, font settings and Markdown theme
+remain configurable.
+
+```sh
+cmdf --html --c89 report.md > report.html  # self-contained fonts and SVGs
+cmdf -o report.html --c89 report.md        # infers HTML from the filename
+cmdf -o report.html --c89 --html-dump-font report.md
+```
+
+The last command writes the fonts plus `c89-mark.svg` and `c89-systems.svg`
+beside the HTML. SVGs follow `--html-dump-font-force` preservation/replacement
+rules. With custom font paths, SVG destinations and references are siblings
+of the regular font (including its URI query/fragment suffix). When external
+fonts use their default upstream URLs without dumping, SVGs reference the
+original C89 Systems URLs. CSS and section navigation stay inline in all modes.
+
+C callers set `opts.html_c89 = 1` before `mdf_create(MDF_FORMAT_HTML, ...)`.
+`mdf_html_c89_resolve_dump_paths` resolves enabled SVG dump destinations without
+writing files, so wrappers can protect their input/output paths before creation.
+Lua callers use `{html = true, c89 = true}` and
+`mdf.html_c89_dump_paths(opts)`; `cmdf.lua` also accepts `--c89`.
+
+## Font embedding and external assets
+
+For HTML, libmdf and `cmdf` embed JetBrains Mono variable WOFF2 data by
+default. `--html-disable-embedded-font` instead references byte-identical,
+weight-variable upstream files at the immutable JetBrains Mono commit
+`02bb50b082dad9ef8a0f33ac393839202b760223`; this preserves real 700-weight
+headings without embedding the bytes in the document. `--html-font-uri` is an
+external URI base and derives both standard filenames;
+`--html-font-regular-uri` and `--html-font-italic-uri` override either output
+URI independently. Query and fragment suffixes remain after each derived font
+filename. A URI also automatically selects external output. Custom
+external files must provide the weight variation needed by the document when
+typography parity with the built-in faces matters.
+
+Dumping is an explicit pre-operation. A bare `cmdf --html-dump-font` (or
+`--html-dump-font-force`) writes `JetBrainsMono-Regular.woff2` and
+`JetBrainsMono-Italic.woff2` beside an explicit HTML output, or to the current
+directory when writing HTML to stdout, and references them relatively from the
+generated HTML. With a local path or `file://`
+`--html-font-uri`, that URI is both the output reference base and the dump
+directory; with `--output`, a relative local URI is dumped beneath that output
+directory so its literal HTML reference resolves correctly. Only local paths
+and `file://` URI bases can derive dump paths; all other URI bases require
+`--html-dump-font-path` or both paired dump paths. Dump paths select
+only where the bundled files are written; configured
+base and per-face URIs always remain the HTML references. When no URI is set
+and `--output` is used, `cmdf` derives each local reference relative to the
+HTML file while preserving dump paths as filesystem paths relative to the
+invocation directory. Existing files are preserved unless
+`--html-dump-font-force` is used; force mode replaces both face files and
+refuses symlinks and special files. In `cmdf`, providing any dump path is a
+convenience shortcut that enables dumping. `cmdf` rejects a resolved dump
+destination that aliases its input, `--output` path, or the active stdout
+destination (including `/dev/stdout` and descriptor aliases). C callers use the same
+behavior through `mdf_options`, or may call
+`mdf_dump_html_jetbrains_mono_font_to_paths`
+directly. Applications can provide a different embedded family through
+`mdf_options.html_font` or obtain the built-in borrowed descriptor through
+`mdf_html_jetbrains_mono_font`. `cmdf` infers HTML output from
+`.html` and `.htm` output paths when `--html` is omitted, warning before it
+renders. Use `--title` or `-T` to override the title described below.
+
+## Titles and provenance
+
+For HTML, `mdf_set_html_title(renderer, title)` can set an optional document
+title after `mdf_create` and before rendering starts. Passing `NULL` clears the
+override. When no explicit title is set, libmdf auto-detects the title from an
+initial ATX heading before any paragraph and otherwise falls back to `mdf`. The
+probe stops as soon as the input proves there is no initial ATX title, then
+continues rendering through the same source stream. This title probe is
+HTML/deck-only; ANSI rendering never collects heading text for title detection.
+
+Complete HTML documents generated by libmdf include this provenance comment
+immediately after the doctype:
+
+```html
+<!-- Generated by libmdf (C) 2026 Michel Blomgren https://pkt.systems/c/libmdf -->
+```
+
+## Escaping and links
+
+The renderer supports the Markdown constructs covered by the parity corpus:
+headings, emphasis, links, autolinks, blockquotes, lists, task lists, fenced and
+indented code, front matter, thematic breaks, entities, tables, and inline HTML
+handling used by `cmdf`.
+
+HTML output escapes text and attributes. Link `href` output is restricted to
+safe schemes: `http`, `https`, `mailto`, and relative URLs. Unsafe schemes such
+as `javascript:`, `data:`, `vbscript:`, and `file:` are not emitted as active
+anchors. Normal HTML links do not force a new browsing context; deck-mode links
+open in a new tab/window with opener protection.

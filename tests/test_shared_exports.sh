@@ -21,6 +21,8 @@ mdf_html_font_resolve_dump_paths
 mdf_html_jetbrains_mono_font
 mdf_options_init
 mdf_pager_file
+mdf_pager_file_with_options
+mdf_pager_seekable_source
 mdf_pager_source
 mdf_paths_alias
 mdf_render

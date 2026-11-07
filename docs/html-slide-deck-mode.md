@@ -73,7 +73,7 @@ if (mdf_create(MDF_FORMAT_HTML_DECK, &opts, &deck) == MDF_OK) {
 An explicit `theme_name` overrides front matter. Set an explicit document title
 with `mdf_set_html_title` before rendering; otherwise the renderer probes the
 initial ATX heading. Font configuration uses the same options and helpers as
-ordinary HTML. See the [public API guide](../README.md#c-api).
+ordinary HTML. See the [public API guide](c-api.md).
 
 Lua uses the same controls:
 
@@ -124,5 +124,5 @@ the current slide participates in normal keyboard focus and accessibility.
 
 `make test` covers deck API/CLI behavior, slide boundaries, fonts, themes,
 charts and emitted browser controls. Browser interaction is not an automated
-CTest gate. See the [development commands](../README.md#development) for the
+CTest gate. See the [development commands](development.md) for the
 broader local checks.

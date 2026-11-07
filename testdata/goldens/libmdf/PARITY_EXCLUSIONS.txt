@@ -13,6 +13,38 @@
 # Go mdf retains the table-level pipe escape inside code spans. Libmdf
 # consumes that escape as requested, following GFM tables Example 200;
 # other code backslashes and code outside tables remain literal.
+# Literal NBSP has a byte-scoped comparison exception in parityjudge, not a
+# file exclusion: Go emits SPACE while libmdf preserves U+00A0. Goldens for
+# testdata/parity-regressions/literal-nbsp.md pin the original ANSI/HTML bytes;
+# original C bytes/traces compare across fragments, and an NBSP-to-SPACE input
+# control checks the document's final output against the existing parity oracle.
+# Go turns plain intraword underscores into spaces or opens emphasis. Keep
+# these characters literal, including the essay's math-like $I_{k,j}(F)$ text.
+# Named exceptions remain backed by exact ANSI/HTML goldens and native
+# whole/fragmented sink/trace tests; ordinary emphasis rules are unchanged.
+html testdata/10x.md
+html testdata/parity__nbsp.md
+ansi testdata/parity__nbsp.md 20
+ansi testdata/parity__nbsp.md 40
+ansi testdata/parity__nbsp.md 80
+ansi testdata/parity__nbsp.md 100
+ansi testdata/parity__nbsp.md 120
+trace testdata/parity__nbsp.md 20
+trace testdata/parity__nbsp.md 40
+trace testdata/parity__nbsp.md 80
+trace testdata/parity__nbsp.md 100
+trace testdata/parity__nbsp.md 120
+html testdata/parity-regressions/intraword-underscores.md
+ansi testdata/parity-regressions/intraword-underscores.md 20
+ansi testdata/parity-regressions/intraword-underscores.md 40
+ansi testdata/parity-regressions/intraword-underscores.md 80
+ansi testdata/parity-regressions/intraword-underscores.md 100
+ansi testdata/parity-regressions/intraword-underscores.md 120
+trace testdata/parity-regressions/intraword-underscores.md 20
+trace testdata/parity-regressions/intraword-underscores.md 40
+trace testdata/parity-regressions/intraword-underscores.md 80
+trace testdata/parity-regressions/intraword-underscores.md 100
+trace testdata/parity-regressions/intraword-underscores.md 120
 html testdata/table-corpus/escaped-code-pipes.md
 ansi testdata/table-corpus/escaped-code-pipes.md 20
 ansi testdata/table-corpus/escaped-code-pipes.md 40

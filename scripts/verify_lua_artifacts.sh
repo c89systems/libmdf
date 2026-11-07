@@ -19,6 +19,7 @@ tar -C "$work/archive" -xzf "$archive"
 source="$work/archive/libmdf-lua-$version"
 test "$(cat "$source/VERSION")" = "$version"
 for required in LICENSE README.md VERSION RELEASE_MANIFEST libmdf-scm-1.rockspec.in lua/libmdf.lua lua/libmdf_core.c; do test -f "$source/$required"; done
+cmake -DDOCUMENT_ROOT="$source" -DREFERENCE_ROOT="$root" -P "$root/cmake/CheckDocumentation.cmake"
 (cd "$source" && find . -type f ! -name RELEASE_MANIFEST | sed 's#^./##' | sort) > "$work/manifest.actual"
 sort "$source/RELEASE_MANIFEST" > "$work/manifest.expected"
 cmp "$work/manifest.actual" "$work/manifest.expected"

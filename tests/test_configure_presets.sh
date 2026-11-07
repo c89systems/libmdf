@@ -33,7 +33,7 @@ source="$work/editor-source"
 rm -rf -- "$source"
 mkdir -p "$source/parityjudge"
 cp "$root/"{CMakeLists.txt,CMakePresets.json,LICENSE,README.md,libmdf-scm-1.rockspec.in,.clangd} "$source/"
-cp -R "$root/"{assets,benchmarks,cmake,examples,fuzz,include,scripts,src,tests} "$source/"
+cp -R "$root/"{assets,benchmarks,cmake,docs,examples,fuzz,include,scripts,src,tests} "$source/"
 cp "$root/parityjudge/"{*.go,*.[ch],go.mod,go.sum} "$source/parityjudge/"
 cmake --preset debug -S "$source" -B "$source/build/debug" -DLIBMDF_BUILD_LUA_TESTS=OFF > "$work/editor-native.log" 2>&1
 ctest --test-dir "$source/build/debug" -R '^editor_clangd$' --output-on-failure --no-tests=error \

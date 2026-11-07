@@ -7,7 +7,7 @@ work="$root/build/test-package-native"
 source="$work/source"
 mkdir -p "$source/tests"
 cp "$root/"{CMakeLists.txt,CMakePresets.json,LICENSE,README.md} "$source/"
-cp -R "$root/"{src,include,cmake,scripts,assets} "$source/"
+cp -R "$root/"{src,include,cmake,scripts,assets,docs} "$source/"
 cp -R "$root/"{tests,benchmarks} "$source/"
 version=$("$source/scripts/version.sh")
 build="$source/build/x86_64-linux-gnu-release"
@@ -28,23 +28,37 @@ for binary in libmdf.a "libmdf.so.$version" cmdf; do
   test ! "$build/$binary" -nt "$work/warm-$binary" || { printf 'Warm packaging rebuilt %s\n' "$binary" >&2; exit 1; }
 done
 cmp "$work/first.tar.gz" "$work/dist/$sdk.tar.gz"
+# Documentation-only changes must refresh archives without rebuilding code.
+printf '\nDocumentation packaging fixture.\n' >> "$source/docs/pager.md"
+"$source/scripts/package.sh" >> "$work/package.log" 2>&1
+for binary in libmdf.a "libmdf.so.$version" cmdf; do
+  test ! "$build/$binary" -nt "$work/warm-$binary" || { printf 'Documentation packaging rebuilt %s\n' "$binary" >&2; exit 1; }
+done
+mkdir -p "$work/docs-test"
+tar -C "$work/docs-test" -xzf "$work/dist/$sdk.tar.gz"
+cmp "$source/docs/pager.md" "$work/docs-test/$sdk/share/doc/libmdf/docs/pager.md"
 grep -Fxq 'keep sibling' "$work/dist/unrelated-artifact.txt"
 grep -Fxq 'keep stale candidate' "$work/dist/libmdf-9.9.9-armhf-linux-gnu.tar.gz"
 test ! -e "$work/dist/libmdf-$version-CHECKSUMS"
 "$source/scripts/package-verify.sh" binary > "$work/verify.log" 2>&1
 cli="cmdf-$version-x86_64-linux-gnu"
 cp "$work/dist/$cli.tar.gz" "$work/valid-cli.tar.gz"
-for notice in LICENSE OFL.txt; do
+for notice in LICENSE OFL.txt docs/pager.md; do
+  notice_label=${notice//\//_}
   rm -rf "$work/notice-test"
   mkdir -p "$work/notice-test"
   tar -C "$work/notice-test" -xzf "$work/valid-cli.tar.gz"
   rm "$work/notice-test/$cli/share/doc/cmdf/$notice"
   "$root/scripts/archive.sh" "$work/notice-test" "$cli" "$work/dist/$cli.tar.gz"
-  "$source/scripts/package_checksums.sh" binary > "$work/notice-$notice-checksums.log"
-  if "$source/scripts/package-verify.sh" binary > "$work/notice-$notice.log" 2>&1; then
+  "$source/scripts/package_checksums.sh" binary > "$work/notice-$notice_label-checksums.log"
+  if "$source/scripts/package-verify.sh" binary > "$work/notice-$notice_label.log" 2>&1; then
     printf 'CLI verification accepted missing %s\n' "$notice" >&2; exit 1;
   fi
-  grep -Fq "Missing mandatory CLI payload: share/doc/cmdf/$notice" "$work/notice-$notice.log"
+  if [[ $notice == docs/* ]]; then
+    grep -Fq "Missing documentation file: $notice" "$work/notice-$notice_label.log"
+  else
+    grep -Fq "Missing mandatory CLI payload: share/doc/cmdf/$notice" "$work/notice-$notice_label.log"
+  fi
   test ! -d "$source/build/package-verify/binary/libmdf-$version-x86_64-linux-gnu.tar.gz/consumers"
 done
 cp "$work/valid-cli.tar.gz" "$work/dist/$cli.tar.gz"

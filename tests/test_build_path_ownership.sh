@@ -7,6 +7,8 @@ work="$root/build/test-build-path-ownership"
 rm -rf -- "$work"
 source="$work/source"
 mkdir -p "$source/scripts" "$source/lua" "$source/build" "$source/sentinel" "$source/dist" "$work/borrowed/stage"
+mkdir -p "$source/docs"
+printf 'fixture\n' > "$source/docs/guide.md"
 cp "$root/scripts/"{require_build_path.sh,stage_lua_rock_sources.sh,package.sh,package_checksums.sh,release_targets.sh,release_artifacts.sh,version.sh} "$source/scripts/"
 for file in LICENSE README.md libmdf-scm-1.rockspec.in lua/libmdf.lua lua/libmdf_core.c; do printf 'fixture\n' > "$source/$file"; done
 printf 'preserve\n' > "$source/sentinel/marker"

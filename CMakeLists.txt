@@ -110,6 +110,7 @@ set(LIBMDF_SOURCES
   src/html_fonts.c
   src/html_c89.c
   src/pager.c
+  src/pager_query.c
   src/path.c
   src/render_html.c
   src/render_parse.c
@@ -206,6 +207,7 @@ if(LIBMDF_BUILD_EXAMPLES)
   libmdf_configure_development_runtime(example_basic)
 endif()
 
+file(GLOB LIBMDF_DOCUMENTATION CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/docs/*.md")
 include(cmake/Tests.cmake)
 if(LIBMDF_BUILD_LUA_TESTS)
   include(cmake/LuaTests.cmake)
@@ -262,9 +264,11 @@ if(LIBMDF_INSTALL)
       install(TARGETS cmdf RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT cli)
       install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/cmdf.lua" DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT cli)
       install(FILES LICENSE README.md src/html_embedded/OFL.txt DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmdf COMPONENT cli)
+      install(FILES ${LIBMDF_DOCUMENTATION} DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/cmdf/docs COMPONENT cli)
     endif()
   endif()
   install(FILES LICENSE README.md src/html_embedded/OFL.txt DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/libmdf COMPONENT sdk)
+  install(FILES ${LIBMDF_DOCUMENTATION} DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/libmdf/docs COMPONENT sdk)
   configure_package_config_file(cmake/libmdfConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/libmdfConfig.cmake
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libmdf)

@@ -1,0 +1,9 @@
+# Non-breaking spaces
+
+Use HTML entities to keep numbers together:
+
+350 000 should not wrap. 120 000 should not wrap. 42 000 should not wrap. Big numbers like 10_000_000 should not wrap.
+
+Mixing inline text: A B and C D and E F.
+
+This&nbsp should render as &#160is.

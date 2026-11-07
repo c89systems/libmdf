@@ -1,0 +1,8 @@
+$I_{k,j}(F)$ stays literal.
+
+foo_bar_baz and foo__bar__baz stay
+identifiers.
+
+end_ [3m[34mitalic[0m and [1m[1;37mbold[0m remain distinct.
+
+_[3m[34mitalic[0m

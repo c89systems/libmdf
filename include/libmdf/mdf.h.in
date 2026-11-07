@@ -1,3 +1,29 @@
+/**
+ * @file mdf.h
+ * @brief Public C89/POSIX API for Markdown rendering and interactive paging.
+ *
+ * Include this file or <libmdf.h>. Initialize custom options with
+ * mdf_options_init, create a receiver with mdf_create, and release its strings
+ * with string_free before calling destroy. The options record is copied;
+ * custom allocator contexts and font data/readers must outlive the receiver.
+ *
+ * Source/sink rendering and incremental feeds are synchronous. Callback byte
+ * pointers are borrowed only during the callback; a bound sink's callback and
+ * userdata remain caller-owned until replacement or destruction. A receiver
+ * must not be used concurrently. Source callbacks may change geometry; output
+ * callbacks must not mutate or destroy the active receiver.
+ *
+ * render_cstr and escape_markdown return materialized strings. The source and
+ * incremental APIs stream rendering decisions with separately bounded word,
+ * table and emission storage. HTML decks buffer one slide at a time. The pager
+ * is a buffered consumer with its own bounded content cache; its forward-only
+ * compatibility API buffers input.
+ *
+ * @see mdf_create
+ * @see mdf_options
+ * @see mdf_feed
+ * @see mdf_pager_file_with_options
+ */
 #ifndef LIBMDF_MDF_H
 #define LIBMDF_MDF_H
 
@@ -29,7 +55,9 @@ typedef enum mdf_status {
     /** Markdown input could not be parsed. */
     MDF_ERROR_PARSE = 4,
     /** Pager cancellation was requested; terminal state has been restored. */
-    MDF_CANCELLED = 5
+    MDF_CANCELLED = 5,
+    /** The terminal viewport cannot fit in the configured pager content cache. */
+    MDF_ERROR_TERMINAL_SIZE = 6
 } mdf_status;
 
 /** Select how the pager interprets its named input. */
@@ -56,6 +84,38 @@ typedef struct mdf_pager_control {
      */
     int (*should_cancel)(void *userdata);
 } mdf_pager_control;
+
+/** Absolute byte offset, expressed as two unsigned 32-bit halves for C89.
+ * Each half must be at most 4294967295. */
+typedef struct mdf_source_offset {
+    /** Most significant 32 bits. */
+    unsigned long high;
+    /** Least significant 32 bits. */
+    unsigned long low;
+} mdf_source_offset;
+
+/** Borrowed, finite, seekable pager input. Callbacks run synchronously.
+ * Keep its bytes stable until the pager returns. No input copy is made.
+ * read has the same contract as mdf_source.read. seek returns zero on success
+ * and nonzero on failure, and sets the next read's absolute byte position.
+ * The pager may rewind and replay Markdown to reconstruct parser state. */
+typedef struct mdf_seekable_source {
+    /** Borrowed callback context. */
+    void *userdata;
+    /** Return at most cap bytes; zero with err=0 signals EOF. Set err on failure. */
+    size_t (*read)(void *userdata, char *dst, size_t cap, int *err);
+    /** Seek to an absolute byte offset; return zero on success. */
+    int (*seek)(void *userdata, const mdf_source_offset *offset);
+} mdf_seekable_source;
+
+/** Pager cache configuration. A zeroed record selects all defaults. */
+typedef struct mdf_pager_options {
+    /** Retained rendered content bytes in one contiguous cache, excluding its
+     * NUL terminator. Zero selects 1 MiB; nonzero values must be at least 64 KiB.
+     * Search/index workspace and renderer decision storage are bounded separately.
+     * Word-buffer limits do not apply to this content allowance. */
+    size_t cache_budget;
+} mdf_pager_options;
 
 /**
  * Output renderer selection.
@@ -142,9 +202,11 @@ typedef struct mdf_allocator {
 #define MDF_WORD_SPOOL_MAX_BYTES 1048576u
 /** Optional reusable-memory retention limits. Zero selects library defaults. */
 typedef struct mdf_memory_options {
-    /** Total retained workspace capacity allowed after a render. */
+    /** Retained workspace capacity after a render; zero selects 256 KiB.
+     * This limits reusable storage, not the active render's live allocations. */
     size_t max_retained_bytes;
-    /** Largest individual workspace block eligible for retention. */
+    /** Largest reusable block; zero selects 8192 bytes. Larger freed blocks
+     * are returned to the underlying allocator instead of being cached. */
     size_t max_reusable_block_bytes;
 } mdf_memory_options;
 
@@ -160,7 +222,8 @@ typedef struct mdf_write_trace {
     void *userdata;
     /**
      * Observe one completed ANSI sink write. src/len exactly match the write
-     * that just succeeded; returning nonzero makes the render fail.
+     * that just succeeded; src is borrowed for this callback only. Returning
+     * nonzero fails the render after that write, without retrying it.
      */
     int (*emit)(void *userdata, mdf_format format, const char *src, size_t len);
 } mdf_write_trace;
@@ -172,7 +235,7 @@ typedef struct mdf_write_trace {
  * A supplied owned, non-fixed buffer may grow through allocator callbacks.
  */
 typedef struct mdf_emission_buffer {
-    /** Optional caller-supplied storage. */
+    /** Optional caller-supplied storage; keep non-owned data alive until destroy. */
     void *data;
     /** Capacity of data in bytes; ignored when data is NULL. */
     size_t cap;
@@ -182,7 +245,8 @@ typedef struct mdf_emission_buffer {
     size_t max_cap;
     /** Nonzero makes supplied data hard bounded. */
     int fixed;
-    /** Nonzero transfers supplied-data cleanup to the renderer. */
+    /** Nonzero transfers supplied-data cleanup to the renderer on successful
+     * creation. The configured allocator must be able to release the block. */
     int take_ownership;
 } mdf_emission_buffer;
 
@@ -280,7 +344,7 @@ typedef struct mdf_options {
      * an explicit override.
      */
     const char *theme_name;
-    /** HTML document width in ch. HTML charts are centered inside this content width. */
+    /** HTML document width in ch; default 96. Charts are centered in this width. */
     double html_content_width_ch;
     /** C89 Systems page branding, for MDF_FORMAT_HTML only. Default zero.
      * SVGs follow the font's embedded/external mode. Font dumping also writes
@@ -331,17 +395,18 @@ typedef struct mdf_options {
      * explicit local dump paths.
      */
     int html_dump_font;
-    /** Replace existing regular and italic files while dumping; otherwise existing files are preserved. */
+    /** Enable dumping and replace existing regular/italic files; default zero.
+     * Force mode refuses symlinks and special files. */
     int html_dump_font_force;
     /** HTML deck transition behavior. Default is MDF_DECK_TRANSITION_FADE. */
     mdf_deck_transition deck_transition;
-    /** Show slide numbers on deck slides after the first slide. */
+    /** Show slide numbers after the first deck slide; default zero (disabled). */
     int slide_numbers;
-    /** Center-align paragraph text on the first deck slide. */
+    /** Center first-slide paragraph text; default zero (left aligned). */
     int deck_center_front_text;
-    /** ANSI/HTML table buffering mode; chart fences ignore it. */
+    /** ANSI/HTML table buffering policy; default FULL. Chart fences ignore it. */
     mdf_table_buffer_mode table_buffer_mode;
-    /** ANSI table border style; does not affect chart fence drawing. */
+    /** ANSI table borders; default LINE (Unicode). Charts use their own shapes. */
     mdf_table_wire_mode table_wire_mode;
     /** ANSI emission buffer policy. */
     mdf_emission_buffer emission_buffer;
@@ -356,26 +421,32 @@ typedef struct mdf_options {
 /**
  * Streaming input source. read fills at most cap bytes, returns zero at EOF,
  * and sets *err nonzero on failure. It must not return more than cap bytes.
- * userdata and the callback remain owned by the caller for the synchronous
+ * A short positive read is not EOF. Input chunks are borrowed only while they
+ * are consumed; userdata and the callback stay caller-owned for the synchronous
  * render call.
  */
 typedef struct mdf_source {
     /** Opaque value passed to read. */
     void *userdata;
-    /** Read the next input chunk. */
+    /** Fill dst with at most cap bytes. Return zero with err=0 at EOF;
+     * set *err nonzero on failure. dst is writable only for this callback. */
     size_t (*read)(void *userdata, char *dst, size_t cap, int *err);
 } mdf_source;
 
 /**
- * Streaming output sink. Each write is one decided renderer emission; it must
- * accept the complete src/len pair or return nonzero. This is not a partial
- * write, file-descriptor, or queued-output interface. userdata and the callback
- * remain owned by the caller for the duration of a render.
+ * Synchronous output sink. Accept the complete src/len pair or return nonzero;
+ * partial writes are not supported. src is borrowed only for the callback.
+ * ANSI writes correspond one-to-one with decided emissions and write_trace
+ * events. HTML/deck writes can also contain structural markup.
+ * userdata and the callback stay caller-owned. An explicit-sink operation
+ * borrows them for its call; a bound receiver sink needs them until replacement
+ * or destruction. libmdf supplies no output queue or retry mechanism.
  */
 typedef struct mdf_sink {
     /** Opaque value passed to write. */
     void *userdata;
-    /** Write one complete decided output emission. */
+    /** Accept all len bytes and return zero, or return nonzero on failure.
+     * Copy bytes before retaining them beyond this callback. */
     int (*write)(void *userdata, const char *src, size_t len);
 } mdf_sink;
 
@@ -441,11 +512,13 @@ typedef enum mdf_token_type {
 typedef struct mdf_token {
     /** Token discriminator. */
     mdf_token_type type;
-    /** Token payload bytes. For MDF_TOKEN_CHART_BLOCK this is the chart CSV body. */
+    /** Borrowed payload bytes, valid for the write_token call. text must be
+     * non-NULL when len is nonzero; CHART_BLOCK carries its collected CSV. */
     const char *text;
     /** Token payload byte length. */
     size_t len;
-    /** Token-specific metadata. For MDF_TOKEN_CHART_BLOCK this is an internal chart kind. */
+    /** Heading depth (1..6) for HEADING_START; parser metadata for other
+     * structural tokens. CHART_BLOCK kinds are internal; use Markdown fences. */
     int level;
 } mdf_token;
 
@@ -522,7 +595,8 @@ struct mdf {
      * On success, release *out through string_free; *out is NULL on failure.
      */
     mdf_status (*render_cstr)(mdf *self, const char *markdown, char **out);
-    /** Return a borrowed latest diagnostic string, valid until the next renderer call or destroy. */
+    /** Borrow the latest diagnostic until the next receiver call or destroy.
+     * An empty string means no diagnostic; do not free or modify the result. */
     const char *(*error)(const mdf *self);
     /**
      * Destroy the renderer and release its owned state. NULL is accepted.
@@ -531,7 +605,8 @@ struct mdf {
      * and records a diagnostic available through error.
      */
     void (*destroy)(mdf *self);
-    /** Free a string returned by this renderer, including render_cstr output. */
+    /** Free a string returned by this renderer before destroying the receiver.
+     * NULL strings are accepted; use the same receiver that allocated it. */
     void (*string_free)(mdf *self, char *s);
     /**
      * Feed a nonempty Markdown fragment into the active incremental document.
@@ -589,7 +664,8 @@ struct mdf {
     /** Page a file using this ANSI receiver's options; see mdf_pager_file. */
     mdf_status (*pager_file)(mdf *self, const char *path, mdf_pager_format format,
                              const mdf_pager_control *control);
-    /** Page a finite source using this ANSI receiver's options; see mdf_pager_source. */
+    /** Buffer finite forward-only input before paging; see mdf_pager_source
+     * for its 1 MiB input cap and the seekable alternative. */
     mdf_status (*pager_source)(mdf *self, const char *name, mdf_source *source,
                                mdf_pager_format format, const mdf_pager_control *control);
     /** Configure per-word memory and optional file backing; see mdf_set_word_buffer. */
@@ -598,6 +674,14 @@ struct mdf {
     mdf_status (*write_literal)(mdf *self, const char *data, size_t len);
     /** Escape Markdown syntax into an allocated string; see mdf_escape_markdown. */
     mdf_status (*escape_markdown)(mdf *self, const char *text, char **out);
+    /** Page with a configured cache; see mdf_pager_file_with_options. */
+    mdf_status (*pager_file_with_options)(mdf *self, const char *path, mdf_pager_format format,
+                                         const mdf_pager_control *control,
+                                         const mdf_pager_options *options);
+    /** Page borrowed seekable input; see mdf_pager_seekable_source. */
+    mdf_status (*pager_seekable_source)(mdf *self, const char *name, mdf_seekable_source *source,
+                                       mdf_pager_format format, const mdf_pager_control *control,
+                                       const mdf_pager_options *options);
 };
 
 /**
@@ -607,6 +691,8 @@ struct mdf {
  * and osc8=0: unknown sinks produce escape-free UTF-8 at width 80.
  * NULL is accepted as a no-op. A merely zeroed record has output_fd=0 and is
  * not equivalent to these defaults; use this initializer.
+ *
+ * @param opts Options record to initialize; NULL is a no-op.
  */
 void mdf_options_init(mdf_options *opts);
 /**
@@ -617,6 +703,11 @@ void mdf_options_init(mdf_options *opts);
  * escape policy and automatic width are resolved here, using opts->output_fd,
  * not the later sink binding. OFF strips input terminal escapes before parsing
  * and on manual-token output. Invalid ansi_mode values return MDF_ERROR_INVALID.
+ *
+ * @param format ANSI, HTML document, or HTML deck output.
+ * @param opts Initialized options, or NULL for defaults.
+ * @param out Required result pointer; set to NULL on failure.
+ * @return MDF_OK on success; invalid options, allocation or asset-dump failures return an error.
  */
 mdf_status mdf_create(mdf_format format, const mdf_options *opts, mdf **out);
 /**
@@ -632,6 +723,11 @@ mdf_status mdf_create(mdf_format format, const mdf_options *opts, mdf **out);
  * The explicit-sink free functions below borrow their sink for their call and
  * never replace this receiver binding. A binding cannot be changed while an
  * active output operation is invoking source, sink, or trace callbacks.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param sink Required sink record to copy; callback/context stay borrowed.
+ * @return MDF_OK after binding, including if old-sink cleanup failed;
+ * MDF_ERROR_INVALID for invalid arguments or a prohibited binding change.
  */
 mdf_status mdf_set_sink(mdf *renderer, const mdf_sink *sink);
 /**
@@ -650,6 +746,10 @@ mdf_status mdf_set_sink(mdf *renderer, const mdf_sink *sink);
  * from a sink or write-trace callback so the active emission stays intact.
  * If reflow runs out of memory, the previous width remains configured, but
  * the failed document requires reset and caller-owned replay.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param width Positive total ANSI width before margins.
+ * @return MDF_OK on success, or a validation/allocation error while updating retained layout.
  */
 mdf_status mdf_set_width(mdf *renderer, int width);
 /**
@@ -668,6 +768,11 @@ mdf_status mdf_set_width(mdf *renderer, int width);
  * Filesystem failures return MDF_ERROR_IO. Configure between documents or
  * while no inline decision is pending; callbacks, pending words and deck
  * renderers reject changes.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param memory_limit Retained word bytes; zero selects the default, maximum 65536.
+ * @param disable_spooling Nonzero truncates oversized words instead of using a file.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID for an unsupported limit or active decision.
  */
 mdf_status mdf_set_word_buffer(mdf *renderer, size_t memory_limit, int disable_spooling);
 /**
@@ -688,6 +793,12 @@ mdf_status mdf_set_word_buffer(mdf *renderer, size_t memory_limit, int disable_s
  * as at creation. On reflow allocation failure, the previous geometry remains
  * configured but the current document fails; reset and caller-owned replay
  * are required, as with mdf_set_width.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param width Positive total ANSI width before margins.
+ * @param margin_left Nonnegative ANSI left margin.
+ * @param margin_right Nonnegative ANSI right margin.
+ * @return MDF_OK on success, or a validation/allocation error while updating retained layout.
  */
 mdf_status mdf_set_geometry(mdf *renderer, int width, int margin_left, int margin_right);
 /**
@@ -701,11 +812,20 @@ mdf_status mdf_set_geometry(mdf *renderer, int width, int margin_left, int margi
  * sink failure returns MDF_ERROR_IO after state has been discarded. It cannot
  * interrupt an active output operation, including callbacks invoked by
  * synchronous, incremental, reset, and manual-token rendering calls.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @return MDF_OK after reset, MDF_ERROR_INVALID for invalid arguments/state,
+ * MDF_ERROR_NOMEM composing cleanup, or MDF_ERROR_IO writing cleanup.
  */
 mdf_status mdf_reset(mdf *renderer);
 /**
  * Render a token through an explicit sink borrowed for this call only; it does
  * not bind that sink and cannot interrupt another active output operation.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param token Borrowed token; payload bytes need remain valid only for this call.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument, rendering, allocation or sink/storage I/O error.
  */
 mdf_status mdf_write_token(mdf *renderer, const mdf_token *token, mdf_sink *sink);
 /**
@@ -718,6 +838,12 @@ mdf_status mdf_write_token(mdf *renderer, const mdf_token *token, mdf_sink *sink
  * NULL only when len is zero. The sink is borrowed for this call.
  * Requires closed inline Markdown syntax; unresolved syntax is rejected
  * without emission. Deck renderers do not support manual token input.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param data Borrowed input bytes.
+ * @param len Input byte count, independent of any NUL bytes.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument, inline-state, allocation or sink/storage I/O error.
  */
 mdf_status mdf_write_literal(mdf *renderer, const char *data, size_t len, mdf_sink *sink);
 /**
@@ -729,17 +855,32 @@ mdf_status mdf_write_literal(mdf *renderer, const char *data, size_t len, mdf_si
  * On success release *out through renderer->string_free. On failure *out is
  * NULL. text must be NUL-terminated; renderer supplies the string allocator.
  * This operation does not render, emit, flush or alter pending input.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param text Required NUL-terminated input text.
+ * @param out Required result pointer; free successful output through string_free.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid arguments, or MDF_ERROR_NOMEM.
  */
 mdf_status mdf_escape_markdown(mdf *renderer, const char *text, char **out);
 /**
  * Finish manual token rendering through an explicit sink borrowed for this
  * call only; it does not bind that sink and cannot interrupt an active output
  * operation.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument, rendering, allocation or sink/storage I/O error.
  */
 mdf_status mdf_finish(mdf *renderer, mdf_sink *sink);
 /**
  * Stream source to an explicit sink without materializing the full input. The
  * sink is borrowed only for this call and does not change a receiver binding.
+ * HTML decks buffer one slide's Markdown and rendered body at a time.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param source Borrowed input callbacks and context, valid until return.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument, parse, allocation or source/sink/storage I/O error.
  */
 mdf_status mdf_render(mdf *renderer, mdf_source *source, mdf_sink *sink);
 /**
@@ -759,6 +900,12 @@ mdf_status mdf_render(mdf *renderer, mdf_source *source, mdf_sink *sink);
  * an explicit title set before the first call. A sink failure latches this
  * document in a failed state without retrying output. After a successful
  * finish, call mdf_begin_document before feeding another document.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param data Borrowed input bytes.
+ * @param len Input byte count, independent of any NUL bytes.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument/state, parse, allocation or sink/storage I/O error.
  */
 mdf_status mdf_feed(mdf *renderer, const char *data, size_t len, mdf_sink *sink);
 /**
@@ -767,6 +914,10 @@ mdf_status mdf_feed(mdf *renderer, const char *data, size_t len, mdf_sink *sink)
  * never emits, resolves, or otherwise changes retained input, including an
  * unfinished table: feed emits every decision as it becomes final, and
  * mdf_finish_document alone applies EOF semantics.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK for an idle/active document, or MDF_ERROR_INVALID for invalid arguments/state.
  */
 mdf_status mdf_flush(mdf *renderer, mdf_sink *sink);
 /**
@@ -775,23 +926,36 @@ mdf_status mdf_flush(mdf *renderer, mdf_sink *sink);
  * retained Markdown under ordinary EOF rules and emits the renderer's final
  * closure. Later feed, flush, or finish_document calls fail until
  * mdf_begin_document succeeds.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @param sink Required output callback/context, borrowed for this call only.
+ * @return MDF_OK on success, or an argument/state, parse, allocation or sink/storage I/O error.
  */
 mdf_status mdf_finish_document(mdf *renderer, mdf_sink *sink);
 /**
  * Start a distinct next incremental document after a successful
  * mdf_finish_document. It leaves the bound sink and configured geometry intact.
+ *
+ * @param renderer Live receiver, owned by the caller.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID unless the prior document finished successfully.
  */
 mdf_status mdf_begin_document(mdf *renderer);
 /**
  * Set or clear the explicit HTML document/deck title before rendering starts.
  * title is copied; NULL restores automatic title detection. ANSI renderers and
  * calls made after output begins reject this operation.
+ *
+ * @param self Live receiver, owned by the caller.
+ * @param title Title to copy, or NULL to restore automatic detection.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid state, or MDF_ERROR_NOMEM.
  */
 mdf_status mdf_set_html_title(mdf *self, const char *title);
 /**
  * Fill out with libmdf's built-in JetBrains Mono regular and italic WOFF2 faces.
  * The returned data pointers are borrowed immutable storage valid for the
  * lifetime of the library and must not be freed or modified by the caller.
+ *
+ * @param out Descriptor to fill with borrowed immutable faces; NULL is a no-op.
  */
 void mdf_html_jetbrains_mono_font(mdf_html_font *out);
 /**
@@ -800,11 +964,21 @@ void mdf_html_jetbrains_mono_font(mdf_html_font *out);
  * separate filesystem objects; equivalent paths and aliases are rejected.
  * Parent directories are not created. Existing files are preserved. Returns
  * MDF_ERROR_INVALID for invalid paths and MDF_ERROR_IO for filesystem failures.
+ *
+ * @param regular_path Local regular-face destination.
+ * @param italic_path Local italic-face destination.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid paths, or MDF_ERROR_IO.
  */
 mdf_status mdf_dump_html_jetbrains_mono_font(const char *regular_path,
                                              const char *italic_path);
-/** Write the built-in faces to explicit local paths, replacing existing regular
- * and italic files. Symlinks and special files are refused. */
+/**
+ * Write the built-in faces to explicit local paths, replacing existing regular
+ * and italic files. Symlinks and special files are refused.
+ *
+ * @param regular_path Local regular-face destination.
+ * @param italic_path Local italic-face destination.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid paths, or MDF_ERROR_IO.
+ */
 mdf_status mdf_dump_html_jetbrains_mono_font_force(const char *regular_path,
                                                    const char *italic_path);
 /**
@@ -812,12 +986,24 @@ mdf_status mdf_dump_html_jetbrains_mono_font_force(const char *regular_path,
  * built-in faces. The directory supplies any omitted path; without it, both
  * explicit paths are required. Parent directories are not created and existing
  * files are preserved. Returns MDF_ERROR_INVALID or MDF_ERROR_IO as above.
+ *
+ * @param font_path Optional local directory for omitted face destinations.
+ * @param regular_path Local regular-face destination.
+ * @param italic_path Local italic-face destination.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid paths, or MDF_ERROR_IO.
  */
 mdf_status mdf_dump_html_jetbrains_mono_font_to_paths(const char *font_path,
                                                       const char *regular_path,
                                                       const char *italic_path);
-/** Same as mdf_dump_html_jetbrains_mono_font_to_paths, replacing existing
- * regular and italic files while refusing symlinks and special files. */
+/**
+ * Same as mdf_dump_html_jetbrains_mono_font_to_paths, replacing existing
+ * regular and italic files while refusing symlinks and special files.
+ *
+ * @param font_path Optional local directory for omitted face destinations.
+ * @param regular_path Local regular-face destination.
+ * @param italic_path Local italic-face destination.
+ * @return MDF_OK on success, MDF_ERROR_INVALID for invalid paths, or MDF_ERROR_IO.
+ */
 mdf_status mdf_dump_html_jetbrains_mono_font_to_paths_force(const char *font_path,
                                                             const char *regular_path,
                                                             const char *italic_path);
@@ -827,15 +1013,31 @@ mdf_status mdf_dump_html_jetbrains_mono_font_to_paths_force(const char *font_pat
  * non-NULL and have nonzero capacity. Returns MDF_ERROR_INVALID when dumping
  * is not enabled or the configured URI/path combination is not local and
  * resolvable.
+ *
+ * @param opts Required initialized options with font dumping enabled.
+ * @param regular_path Caller-provided regular-path output buffer.
+ * @param regular_path_cap Regular-path buffer capacity, including the trailing NUL.
+ * @param italic_path Caller-provided italic-path output buffer.
+ * @param italic_path_cap Italic-path buffer capacity, including the trailing NUL.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID for invalid options, paths or capacities.
  */
 mdf_status mdf_html_font_resolve_dump_paths(const mdf_options *opts,
                                             char *regular_path,
                                             size_t regular_path_cap,
                                             char *italic_path,
                                             size_t italic_path_cap);
-/** Resolve the two C89 SVG destinations beside the regular font without
+/**
+ * Resolve the two C89 SVG destinations beside the regular font without
  * writing files. Requires html_c89 and enabled font dumping. Rejects aliases
- * between any of the four font/SVG destinations. */
+ * between any of the four font/SVG destinations.
+ *
+ * @param opts Required initialized options with C89 branding and font dumping enabled.
+ * @param mark_path Caller-provided output buffer for the mark SVG path.
+ * @param mark_path_cap Mark-path capacity, including the trailing NUL.
+ * @param logo_path Caller-provided output buffer for the logotype SVG path.
+ * @param logo_path_cap Logotype-path capacity, including the trailing NUL.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID for invalid options, aliases or capacities.
+ */
 mdf_status mdf_html_c89_resolve_dump_paths(const mdf_options *opts,
                                          char *mark_path, size_t mark_path_cap,
                                          char *logo_path, size_t logo_path_cap);
@@ -844,21 +1046,48 @@ mdf_status mdf_html_c89_resolve_dump_paths(const mdf_options *opts,
  * object or the same currently absent destination. Identical non-empty path
  * strings are aliases even when their parent directory does not exist. A zero
  * result means no alias could be established; it is not a path validity check.
+ *
+ * @param first_path First nonempty local filesystem path.
+ * @param second_path Second nonempty local filesystem path.
+ * @return Nonzero for a proven alias; zero does not establish path validity.
  */
 int mdf_paths_alias(const char *first_path, const char *second_path);
-/** Return a stable static description for status, including unknown values. */
+/**
+ * Return a stable static description for status, including unknown values.
+ *
+ * @param status Result code to describe.
+ * @return Immutable static text, including for unknown status values.
+ */
 const char *mdf_status_string(mdf_status status);
-/** Number of built-in themes. */
+/**
+ * Number of built-in themes.
+ *
+ * @return Number of names available through mdf_theme_name.
+ */
 size_t mdf_theme_count(void);
-/** Built-in theme name by index, or NULL when index is out of range. */
+/**
+ * Built-in theme name by index, or NULL when index is out of range.
+ *
+ * @param index Zero-based theme index.
+ * @return Borrowed immutable name, or NULL for an out-of-range index.
+ */
 const char *mdf_theme_name(size_t index);
-/** Nonzero when name matches a built-in theme case-insensitively; NULL/empty selects default. */
+/**
+ * Nonzero when name matches a built-in theme case-insensitively; NULL/empty selects default.
+ *
+ * @param name Theme name; NULL/empty selects default.
+ * @return Nonzero for a recognized theme; zero for an unknown name.
+ */
 int mdf_theme_exists(const char *name);
 /**
  * Copy every foreground slot of name into out. NULL/empty name selects default;
  * names are case-insensitive. Unknown names and NULL out return MDF_ERROR_INVALID
  * without modifying out. Color enablement is the caller's responsibility: this
  * lookup does not inspect the environment or terminal and performs no allocation.
+ *
+ * @param name Theme name; NULL/empty selects default.
+ * @param out Required caller-owned palette record; unchanged on invalid arguments.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID without modifying out.
  */
 mdf_status mdf_theme_get_palette(const char *name, mdf_theme_palette *out);
 /**
@@ -867,6 +1096,10 @@ mdf_status mdf_theme_get_palette(const char *name, mdf_theme_palette *out);
  * deck front matter does not change the configured theme. NULL/invalid renderer
  * or NULL out returns MDF_ERROR_INVALID without modifying out. No allocation,
  * rendering, sink writes, environment lookup or terminal detection occurs.
+ *
+ * @param self Live receiver, owned by the caller.
+ * @param out Required caller-owned palette record; unchanged on invalid arguments.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID without modifying out.
  */
 mdf_status mdf_get_theme_palette(const mdf *self, mdf_theme_palette *out);
 /**
@@ -875,6 +1108,12 @@ mdf_status mdf_get_theme_palette(const mdf *self, mdf_theme_palette *out);
  * produces an empty string successfully. Invalid names, levels, NULL out or
  * insufficient out_size return MDF_ERROR_INVALID without modifying out.
  * The same allocation-free, foreground-only rules as mdf_theme_get_palette apply.
+ *
+ * @param name Theme name; NULL/empty selects default.
+ * @param level Heading depth from 1 through 6.
+ * @param out Required caller-owned output buffer; unchanged on failure.
+ * @param out_size Output buffer capacity, including the trailing NUL.
+ * @return MDF_OK on success, or MDF_ERROR_INVALID without modifying out.
  */
 mdf_status mdf_theme_heading_foreground(const char *name, int level, char *out, size_t out_size);
 /**
@@ -884,9 +1123,17 @@ mdf_status mdf_theme_heading_foreground(const char *name, int level, char *out, 
  * TERM=xterm or xterm-* is an optimistic compatibility fallback, including
  * over SSH. This is a heuristic, not capability negotiation. The renderer's
  * ANSI policy still controls whether escapes may reach its output sink.
+ *
+ * @return Nonzero when environment hints suggest OSC8 support; zero otherwise.
  */
 int mdf_detect_osc8_support(void);
-/** Return terminal width for fd, then COLUMNS, then a positive fallback. */
+/**
+ * Return terminal width for fd, then COLUMNS, then a positive fallback.
+ *
+ * @param fd Borrowed file descriptor; it is neither written to nor closed.
+ * @param fallback Fallback width; nonpositive selects 80.
+ * @return Positive columns from the terminal, COLUMNS, or fallback.
+ */
 int mdf_terminal_width(int fd, int fallback);
 /**
  * Interactively page a named regular file on the controlling terminal.
@@ -905,28 +1152,104 @@ int mdf_terminal_width(int fd, int fallback);
  * escapes in rendered Markdown; pager navigation still uses terminal controls.
  * TEXT selects literal text/log viewing with hard wrapping at terminal display
  * columns, independent of filename; Markdown syntax is not interpreted.
+ * Input is read on demand with a default 1 MiB contiguous rendered-content
+ * cache. Indexes and search workspace have a separate bound. The status shows
+ * --% until EOF is known. Search highlights cover cached content; ordinals
+ * and totals are document-wide, with ? until established for the active query.
+ * Forward navigation resumes the live parser. Evicted Markdown and
+ * changed-width views can require cancellable prefix replay. See
+ * mdf_pager_file_with_options to configure the cache budget.
  * Optional control requests cancellation without raising a process signal.
  * Cancellation restores terminal modes, cursor, alternate screen and signal
  * handlers before returning MDF_CANCELLED. Idle waits are capped at 50 ms.
+ * Ctrl+C forwards SIGINT to the restored application handler after cleanup.
+ * If that handler returns or ignores SIGINT, the pager returns MDF_CANCELLED;
+ * the default signal disposition still applies when no handler overrides it.
  * NULL control preserves key and signal behavior. Only one pager may use the
  * process terminal/signal state at a time. Emission storage marked
  * take_ownership transfers when input loading begins and is released on every
  * later return, including cancellation or loading failure.
  * Receiver pager methods require an idle ANSI receiver, use independent pager
  * workspace with its allocator and emission limit, and preserve the bound sink.
+ *
+ * @param path Nonempty path to the regular file to view.
+ * @param render_options Initialized rendering options, or NULL for defaults.
+ * @param format AUTO filename detection, literal TEXT, or MARKDOWN rendering.
+ * @param control Optional borrowed cancellation callback/context; NULL disables polling.
+ * @return MDF_OK on quit, MDF_CANCELLED on cancellation, or an argument, size, rendering or I/O error.
  */
 mdf_status mdf_pager_file(const char *path,
                           const mdf_options *render_options,
                           mdf_pager_format format,
                           const mdf_pager_control *control);
 /**
+ * Like mdf_pager_file, with an explicit cache budget. Input is read on demand;
+ * evicted content is reread, never copied to a temporary input file. The status
+ * shows --% until EOF has been reached at the current width. Search highlights
+ * cover cached content; match ordinals and totals are document-wide. Unknown
+ * ordinals/totals appear as ?. Knowing EOF before a query does not establish its
+ * match total. New queries and changed widths invalidate counts. n/N traverse
+ * the document cyclically, skipping cache slices without matches. If no match
+ * exists, traversal restores the original viewport. End may replay an unsearched
+ * prefix to establish the active query's total, using bounded query state.
+ * Markdown cache misses can require cancellable replay of the source prefix.
+ * The allowance counts rendered bytes, including ANSI sequences and newlines,
+ * with one extra byte allocated for a NUL terminator. Search/index workspace
+ * has its own allocation ceiling of 64 times the content allowance plus 32 KiB,
+ * including growth; it never reduces content capacity. Renderer decision
+ * storage remains separately bounded. A terminal with more content cells than
+ * the allowance, or a rendered viewport/row that cannot fit, returns
+ * MDF_ERROR_TERMINAL_SIZE after restoring terminal state. Search queries are
+ * limited to 4095 UTF-8 bytes.
+ * Initial input read-ahead stops at the allowance even with a short or empty
+ * viewport. Navigation resumes input; query edits and repaint alone do not.
+ * Resize preserves viewed/selected passages even when a formerly cached
+ * document outgrows the cache, and derives search ranks from the new layout.
+ * NULL options selects the default 1 MiB cache.
+ *
+ * @param path Nonempty path to the regular file to view.
+ * @param render_options Initialized rendering options, or NULL for defaults.
+ * @param format AUTO filename detection, literal TEXT, or MARKDOWN rendering.
+ * @param control Optional borrowed cancellation callback/context; NULL disables polling.
+ * @param options Optional pager cache configuration; NULL selects defaults.
+ * @return MDF_OK on quit, MDF_CANCELLED on cancellation, or an argument, size, rendering or I/O error.
+ */
+mdf_status mdf_pager_file_with_options(const char *path, const mdf_options *render_options,
+                                       mdf_pager_format format, const mdf_pager_control *control,
+                                       const mdf_pager_options *options);
+/**
+ * Like mdf_pager_file_with_options, borrowing seekable input until return.
+ * The first read starts at byte zero. The caller owns and closes the source.
+ * A callback failure returns MDF_ERROR_IO after terminal/workspace cleanup.
+ *
+ * @param name Required nonempty label; its .md suffix selects Markdown in AUTO.
+ * @param source Borrowed input callbacks and context, valid until return.
+ * @param render_options Initialized rendering options, or NULL for defaults.
+ * @param format AUTO name detection, literal TEXT, or MARKDOWN rendering.
+ * @param control Optional borrowed cancellation callback/context; NULL disables polling.
+ * @param options Optional pager cache configuration; NULL selects defaults.
+ * @return MDF_OK on quit, MDF_CANCELLED on cancellation, or an argument, size, rendering or I/O error.
+ */
+mdf_status mdf_pager_seekable_source(const char *name, mdf_seekable_source *source,
+                                     const mdf_options *render_options, mdf_pager_format format,
+                                     const mdf_pager_control *control,
+                                     const mdf_pager_options *options);
+/**
  * Read all bytes from source through EOF, then interactively page the named
  * buffered input on the controlling terminal. The source read callback's
  * zero-byte return is the end-of-stream signal. name supplies the status-bar
  * label and selects Markdown in AUTO mode when it has a .md extension.
- * Markdown is rendered through the length-aware renderer source API, so input
- * bytes after an embedded NUL are preserved. This is a buffered pager API:
- * it does not display a live unbounded stream before EOF.
+ * Markdown rendering uses explicit byte lengths, so bytes after an embedded
+ * NUL are preserved. This legacy forward-only API buffers
+ * at most 1 MiB of input before viewing and returns MDF_ERROR_NOMEM for larger
+ * input. Use mdf_pager_seekable_source for large sources without input backing.
+ *
+ * @param name Required nonempty label; its .md suffix selects Markdown in AUTO.
+ * @param source Borrowed input callbacks and context, valid until return.
+ * @param render_options Initialized rendering options, or NULL for defaults.
+ * @param format AUTO name detection, literal TEXT, or MARKDOWN rendering.
+ * @param control Optional borrowed cancellation callback/context; NULL disables polling.
+ * @return MDF_OK on quit, MDF_CANCELLED on cancellation, or an argument, size, rendering or I/O error.
  */
 mdf_status mdf_pager_source(const char *name,
                             mdf_source *source,

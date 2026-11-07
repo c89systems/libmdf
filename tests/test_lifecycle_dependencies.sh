@@ -21,7 +21,7 @@ test -x "$work/cli-install/bin/cmdf.lua"
 # A local source copy lets the test edit a public input without changing the
 # checkout while a verification operation owns it. Release excludes test inputs.
 cp "$root/CMakeLists.txt" "$root/CMakePresets.json" "$root/LICENSE" "$root/README.md" "$work/source/"
-cp -R "$root/assets" "$root/include" "$root/src" "$root/cmake" "$root/scripts" "$work/source/"
+cp -R "$root/assets" "$root/docs" "$root/include" "$root/src" "$root/cmake" "$root/scripts" "$work/source/"
 mkdir -p "$work/dist"
 cmake --preset x86_64-linux-gnu-release -S "$work/source" -B "$work/release" \
   -DLIBMDF_BUILD_TESTS=OFF -DLIBMDF_DIST_DIR="$work/dist" > "$work/header.log" 2>&1

@@ -2034,9 +2034,13 @@ int main(void)
     fails += expect(renderer->set_word_buffer != NULL && renderer->write_literal != NULL && renderer->escape_markdown != NULL &&
                     offsetof(mdf, set_word_buffer) == offsetof(mdf, pager_source) + sizeof(renderer->pager_source) &&
                     offsetof(mdf, write_literal) == offsetof(mdf, set_word_buffer) + sizeof(renderer->set_word_buffer) &&
-                    offsetof(mdf, escape_markdown) == offsetof(mdf, write_literal) + sizeof(renderer->write_literal) &&
-                    sizeof(mdf) == offsetof(mdf, escape_markdown) + sizeof(renderer->escape_markdown),
+                    offsetof(mdf, escape_markdown) == offsetof(mdf, write_literal) + sizeof(renderer->write_literal),
                     "word and literal methods append without shifting released receiver members");
+    fails += expect(renderer->pager_file_with_options != NULL && renderer->pager_seekable_source != NULL &&
+                    offsetof(mdf, pager_file_with_options) == offsetof(mdf, escape_markdown) + sizeof(renderer->escape_markdown) &&
+                    offsetof(mdf, pager_seekable_source) == offsetof(mdf, pager_file_with_options) + sizeof(renderer->pager_file_with_options) &&
+                    sizeof(mdf) == offsetof(mdf, pager_seekable_source) + sizeof(renderer->pager_seekable_source),
+                    "bounded pager methods append after every released receiver member");
     for (reserved_index = 0; reserved_index < MDF_RECEIVER_RESERVED_SLOTS; reserved_index++) {
         fails += expect(renderer->reserved[reserved_index] == NULL,
                         "single-handle api leaves reserved receiver slots null");
@@ -4116,7 +4120,7 @@ int main(void)
     out = NULL;
     st = renderer->render_cstr(renderer, "Big numbers like 10_000_000 should not wrap.\n", &out);
     fails += expect(st == MDF_OK && out != NULL, "intraword underscore render");
-    fails += expect(strstr(out, "10 000 000") != NULL && strstr(out, "10_000_000") == NULL, "intraword underscores become spaces");
+    fails += expect(strstr(out, "10_000_000") != NULL && strstr(out, "10 000 000") == NULL, "intraword underscores remain literal");
     renderer->string_free(renderer, out);
     out = NULL;
     st = renderer->render_cstr(renderer, "What\342\200\231s the smallest experiment that falsifies the wrong path?\n", &out);

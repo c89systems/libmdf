@@ -1,6 +1,7 @@
 # One archive output per component and effective Release producer.
 if(LIBMDF_INSTALL AND CMAKE_BUILD_TYPE STREQUAL "Release" AND LIBMDF_TARGET_ID)
   set(package_inputs
+    ${LIBMDF_DOCUMENTATION}
     "${CMAKE_CURRENT_BINARY_DIR}/cmake_install.cmake"
     "${CMAKE_CURRENT_SOURCE_DIR}/scripts/package_component.sh"
     "${CMAKE_CURRENT_SOURCE_DIR}/scripts/archive.sh"

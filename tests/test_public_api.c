@@ -1133,6 +1133,9 @@ int main(int argc, char **argv)
                     "status string exposes invalid argument");
     fails += expect(strcmp(mdf_status_string(MDF_CANCELLED), "cancelled") == 0,
                     "status string exposes cooperative cancellation");
+    fails += expect(strcmp(mdf_status_string(MDF_ERROR_TERMINAL_SIZE),
+                            "terminal too large for pager content cache") == 0,
+                    "status string distinguishes oversized terminal geometry from allocation failure");
     fails += expect(strcmp(mdf_status_string((mdf_status)99), "unknown status") == 0,
                     "status string exposes unknown fallback");
     fails += expect(mdf_theme_count() > 0, "theme count is non-zero");

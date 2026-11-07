@@ -1,0 +1,8 @@
+$I_{k,j}(F)$ stays literal.
+
+foo_bar_baz and foo__bar__baz stay
+identifiers.
+
+end_ italic and bold remain distinct.
+
+_italic

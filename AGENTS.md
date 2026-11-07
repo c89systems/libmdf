@@ -121,6 +121,21 @@ accumulating compatibility shims.
 When parity and local inferred behavior disagree, parity wins unless the user
 explicitly changes the contract.
 
+In plain inline text, underscores following ASCII letters/digits, including
+continued underscore runs, stay literal rather than becoming spaces or opening
+emphasis. This includes identifiers and math-like text such as `$I_{k,j}(F)$`;
+it does not introduce math rendering. Go's different handling is covered by
+named, golden-backed parity exceptions and native sink/trace tests.
+
+Literal U+00A0 NO-BREAK SPACE is preserved in ANSI and HTML output. Go replaces
+it with U+0020 at final emission; that must not change libmdf's bytes or browser
+wrapping. For literal-NBSP inputs, parity compares original C output and traces
+across source fragments, then compares final output for a separate NBSP-to-SPACE
+input control under the existing parity rules. Go's oversized-NBSP-word layout
+and emission grouping also differ.
+Keep the original bytes, styles and decision boundaries pinned by native goldens
+and sink/trace tests; do not exclude the complete document from the control comparison.
+
 Nested emphasis follows the explicitly authorized word-boundary contract:
 emit decided words without retaining the complete nested span. After a nested
 word has been emitted, an unmatched opening marker is not restored at the outer
@@ -134,6 +149,65 @@ regardless of left margin. Native tests pin URI bytes, subsequent cursor layout,
 and real sink/trace parity. Corpus checks for these URI-bearing ANSI documents
 compare fragmented C rendering against whole-source C rendering; other cases
 continue to compare against Go. Do not restore Go's newline insertion in URLs.
+
+## Pager Cache Ownership
+
+The pager is an explicitly buffered consumer of renderer output. Its cache is
+bounded independently of file size: 1 MiB of contiguous rendered content by
+default, configurable down to 64 KiB. Word-buffer limits are unrelated. Metadata
+and search workspace have a separate bound and never reduce content capacity.
+Cap metadata array growth at the useful cache entry count; arbitrary cache
+budgets must not exhaust workspace merely by rounding past a power of two.
+Terminals whose content-cell count or rendered viewport exceeds the allowance
+fail explicitly with MDF_ERROR_TERMINAL_SIZE, including on resize; do not expand
+the configured content allocation. Internal seam tests exercise 1 KiB caches
+below the public configuration minimum. Named files and seekable callback sources are read on demand;
+never copy their complete input to memory or a backing file. Keep the live
+parser for forward progress. Recover evicted Markdown or changed-width views
+by cancellable source replay. Text indexes are sparse and bounded; file offsets
+and global row positions must work beyond 4 GiB on 32-bit targets.
+Initial read-ahead continues through undecided parser feeds until EOF or the
+configured content/read-ahead bound. A fitting document must be cached in full;
+scrolling its retained tables must not reread or rerender the source.
+The input bound also applies before any complete row exists or a viewport is
+full. A redraw or query edit alone must not resume a paused input scan.
+Evict retained rows only when appending content requires space; extending an
+unfinished view is not itself grounds for discarding cached history.
+
+Show `--%` until EOF is known at the current width. Search highlights describe
+cached content; match ordinals and totals are document-wide. Show `?` for an
+ordinal whose prefix has not been searched, or a total not yet established for
+the active query. Knowing EOF before a query is not knowing its match total.
+Query changes and width changes invalidate counts. Count rendered text,
+including evicted output, through bounded query state and scalar counters;
+never retain a file-wide list of match positions or scan to EOF merely because
+a query was entered. Preserve the renderer's decision/sink/trace contract
+beneath this consumer cache.
+Resize preserves viewed and selected passages, including hits chosen from the
+cache, and derives their ordinals from the new rendering. Neither a cache-local
+index nor an old document-wide rank identifies a passage: table wrapping can
+remove or introduce earlier matches. Keep bounded passage context and source
+hints for reflow; any necessary replay remains bounded and cancellable.
+Duplicate passage anchors use positions relative to their source feed, replayed
+at that exact source boundary, rather than proportions of unrelated caches.
+Keep source coordinates when a document is fully cached. If narrowing makes it
+exceed the allowance, replay to its anchors using the same content allocation;
+the first new cache window need not contain the viewed or selected passage.
+Search traversal is cyclic across the document: `n` wraps at EOF, `N` wraps at
+the beginning, and both skip empty cache slices. A query absent from the entire
+document restores the original viewport after one complete traversal. Keep
+backward cache ranges contiguous even when ordinary read-ahead stops early.
+Retain pending query context across cache seams in both directions, including
+matches longer than the viewport. Query-aware text checkpoints must belong to
+the current query and have no undecided match prefix.
+A wrapped search must resolve pending matches at the origin before declaring
+its traversal complete; retaining the starting row alone is insufficient.
+Styled match extents can exceed the entire content cache (for example, OSC8
+URLs behind short labels). Scan through them with bounded query state, retain
+only the selected endpoints/ordinal, and recover its visible viewport on demand.
+Never protect the complete styled match in the cache or restart indefinitely
+at its pending prefix. A single rendered row that cannot fit must report
+MDF_ERROR_TERMINAL_SIZE, even when rolling back would leave an empty buffer.
 
 ## Release Build Ownership
 

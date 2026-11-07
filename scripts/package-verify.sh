@@ -37,6 +37,7 @@ for artifact in "${artifacts[@]}"; do
   [[ $(find "$dir" -mindepth 1 -maxdepth 1 | wc -l) == 1 ]]
   while IFS= read -r file; do
     case "$kind:$file" in
+      sdk:share/doc/libmdf/docs/*.md|cli:share/doc/cmdf/docs/*.md) ;;
       sdk:include/libmdf.h|sdk:include/libmdf/mdf.h|sdk:lib/libmdf.a|sdk:lib/libmdf.so|sdk:lib/libmdf.so.*|sdk:lib/libmdf*.dylib|sdk:lib/cmake/libmdf/libmdfConfig.cmake|sdk:lib/cmake/libmdf/libmdfConfigVersion.cmake|sdk:lib/cmake/libmdf/libmdfTargets.cmake|sdk:lib/cmake/libmdf/libmdfTargets-release.cmake|sdk:lib/pkgconfig/libmdf.pc|sdk:share/libmdf/package-metadata.txt|sdk:share/doc/libmdf/LICENSE|sdk:share/doc/libmdf/README.md|sdk:share/doc/libmdf/OFL.txt|cli:bin/cmdf|cli:bin/cmdf.lua|cli:share/doc/cmdf/LICENSE|cli:share/doc/cmdf/README.md|cli:share/doc/cmdf/OFL.txt) ;;
       *) printf 'Unexpected %s payload: %s\n' "$kind" "$file" >&2; exit 1;;
     esac
@@ -61,6 +62,10 @@ for artifact in "${artifacts[@]}"; do
     grep -a -q 'JetBrains Mono' "$binary"
     grep -a -Fq 'require("libmdf")' "$package/bin/cmdf.lua"
   fi
+  doc_product=libmdf
+  [[ $kind != cli ]] || doc_product=cmdf
+  cmake -DDOCUMENT_ROOT="$package/share/doc/$doc_product" -DREFERENCE_ROOT="$root" \
+    -P "$root/cmake/CheckDocumentation.cmake"
   if [[ $target == *-linux-* ]]; then
     readelf=$("$root/scripts/discover_target_tools.sh" --target "$target" --preset "$target-release" readelf)
     "$readelf" -h "$binary" > "$dir/header"

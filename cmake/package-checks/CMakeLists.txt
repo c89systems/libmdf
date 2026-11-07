@@ -60,6 +60,7 @@ endif()
 add_test(NAME verify_${LIBMDF_ARTIFACT_SCOPE} COMMAND "${CMAKE_COMMAND}" -E env ${environment} "${script}" ${arguments})
 set_tests_properties(verify_${LIBMDF_ARTIFACT_SCOPE} PROPERTIES LABELS "packaging;e2e" TIMEOUT 600 RUN_SERIAL TRUE)
 file(GLOB_RECURSE scripts CONFIGURE_DEPENDS "${LIBMDF_SOURCE_DIR}/scripts/*.sh" "${LIBMDF_SOURCE_DIR}/cmake/*.cmake"
+  "${LIBMDF_SOURCE_DIR}/docs/*.md"
   "${LIBMDF_SOURCE_DIR}/tests/package-consumer/*")
 if(LIBMDF_ARTIFACT_SCOPE STREQUAL "complete")
   # Source delivery is checked against checkout inputs as well as archive bytes.
@@ -73,7 +74,8 @@ if(LIBMDF_ARTIFACT_SCOPE STREQUAL "complete")
   endforeach()
   list(APPEND scripts ${root_inputs})
 endif()
-list(APPEND scripts "${LIBMDF_SOURCE_DIR}/tests/test_shared_exports.sh" "${LIBMDF_SOURCE_DIR}/CMakeLists.txt")
+list(APPEND scripts "${LIBMDF_SOURCE_DIR}/README.md"
+  "${LIBMDF_SOURCE_DIR}/tests/test_shared_exports.sh" "${LIBMDF_SOURCE_DIR}/CMakeLists.txt")
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/verification-members.txt" CONTENT "${scripts}\n")
 list(APPEND scripts "${CMAKE_CURRENT_BINARY_DIR}/verification-members.txt")
 set(stamp "${CMAKE_CURRENT_BINARY_DIR}/artifacts.pass")

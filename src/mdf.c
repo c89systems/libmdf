@@ -1,3 +1,12 @@
+/**
+ * @file mdf.c
+ * @brief Public receiver lifecycle, configuration and rendering entry points.
+ *
+ * Owns per-instance allocation, document state and the ANSI decision-emission
+ * boundary. Source, token and incremental entry points share renderer state;
+ * terminal render failures release pending word stores before returning.
+ * See <libmdf/mdf.h> for the public ownership and callback contracts.
+ */
 #include "render_internal.h"
 
 #define MDF_MIN_ANSI_CONTENT_WIDTH 3
@@ -67,6 +76,7 @@ static void mdf_impl_reset_render_state(mdf_impl *impl)
     impl->ansi_word_cols = 0;
     impl->ansi_flushing_word = 0;
     impl->ansi_escape_pending = 0;
+    impl->ansi_literal_underscore_run = 0;
     impl->pre_code_len = 0;
     MDF_ZERO_IMPL_SPAN(impl, pre_code_prefix_state, pre_code_wrap_indent);
     MDF_ZERO_IMPL_SPAN(impl, table_cell_mode, inline_mode);
@@ -2422,6 +2432,12 @@ static mdf_status mdf_method_pager_file(mdf *self, const char *path, mdf_pager_f
                                        const mdf_pager_control *control);
 static mdf_status mdf_method_pager_source(mdf *self, const char *name, mdf_source *source,
                                          mdf_pager_format format, const mdf_pager_control *control);
+static mdf_status mdf_method_pager_file_with_options(mdf *self, const char *path, mdf_pager_format format,
+                                                     const mdf_pager_control *control,
+                                                     const mdf_pager_options *options);
+static mdf_status mdf_method_pager_seekable_source(mdf *self, const char *name, mdf_seekable_source *source,
+                                                  mdf_pager_format format, const mdf_pager_control *control,
+                                                  const mdf_pager_options *options);
 
 static void mdf_bind_receiver_methods(mdf *inst)
 {
@@ -2446,6 +2462,8 @@ static void mdf_bind_receiver_methods(mdf *inst)
     inst->set_word_buffer = mdf_set_word_buffer;
     inst->write_literal = mdf_method_write_literal;
     inst->escape_markdown = mdf_escape_markdown;
+    inst->pager_file_with_options = mdf_method_pager_file_with_options;
+    inst->pager_seekable_source = mdf_method_pager_seekable_source;
 }
 
 static mdf_status mdf_impl_configure_emit_buffer(mdf_impl *impl)
@@ -3455,7 +3473,8 @@ static mdf_status mdf_method_render(mdf *self, mdf_source *source)
 
 static mdf_status mdf_method_page(mdf *self, const char *name, mdf_source *source,
                                   mdf_pager_format format, const mdf_pager_control *control,
-                                  int from_source)
+                                  int from_source, mdf_seekable_source *seekable,
+                                  const mdf_pager_options *options)
 {
     mdf_impl *impl;
     mdf_options opts;
@@ -3477,8 +3496,11 @@ static mdf_status mdf_method_page(mdf *self, const char *name, mdf_source *sourc
         opts.emission_buffer.max_cap = impl->emit_cap;
     impl->render_active = 1;
     impl->emission_active++;
-    st = from_source ? mdf_pager_source(name, source, &opts, format, control) :
-                       mdf_pager_file(name, &opts, format, control);
+    if (from_source == 2)
+        st = mdf_pager_seekable_source(name, seekable, &opts, format, control, options);
+    else if (from_source)
+        st = mdf_pager_source(name, source, &opts, format, control);
+    else st = mdf_pager_file_with_options(name, &opts, format, control, options);
     impl->emission_active--;
     impl->render_active = 0;
     mdf_set_error(self, st == MDF_OK ? "" : mdf_status_string(st));
@@ -3488,13 +3510,27 @@ static mdf_status mdf_method_page(mdf *self, const char *name, mdf_source *sourc
 static mdf_status mdf_method_pager_file(mdf *self, const char *path, mdf_pager_format format,
                                        const mdf_pager_control *control)
 {
-    return mdf_method_page(self, path, NULL, format, control, 0);
+    return mdf_method_page(self, path, NULL, format, control, 0, NULL, NULL);
 }
 
 static mdf_status mdf_method_pager_source(mdf *self, const char *name, mdf_source *source,
                                          mdf_pager_format format, const mdf_pager_control *control)
 {
-    return mdf_method_page(self, name, source, format, control, 1);
+    return mdf_method_page(self, name, source, format, control, 1, NULL, NULL);
+}
+
+static mdf_status mdf_method_pager_file_with_options(mdf *self, const char *path, mdf_pager_format format,
+                                                     const mdf_pager_control *control,
+                                                     const mdf_pager_options *options)
+{
+    return mdf_method_page(self, path, NULL, format, control, 0, NULL, options);
+}
+
+static mdf_status mdf_method_pager_seekable_source(mdf *self, const char *name, mdf_seekable_source *source,
+                                                  mdf_pager_format format, const mdf_pager_control *control,
+                                                  const mdf_pager_options *options)
+{
+    return mdf_method_page(self, name, NULL, format, control, 2, source, options);
 }
 
 static mdf_status mdf_method_feed(mdf *self, const char *data, size_t len)
@@ -3600,6 +3636,8 @@ const char *mdf_status_string(mdf_status status)
         return "parse error";
     case MDF_CANCELLED:
         return "cancelled";
+    case MDF_ERROR_TERMINAL_SIZE:
+        return "terminal too large for pager content cache";
     }
     return "unknown status";
 }

@@ -1,3 +1,11 @@
+/**
+ * @file path.c
+ * @brief Private lexical path helpers shared by the CLI and Lua adapters.
+ *
+ * Resolve relative asset references against the working directory without
+ * requiring files to exist or resolving symlinks. These helpers complement
+ * the public filesystem-alias checks; they do not establish object identity.
+ */
 #include "mdf_internal.h"
 
 #include <string.h>

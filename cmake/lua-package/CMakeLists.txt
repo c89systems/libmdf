@@ -10,10 +10,12 @@ endif()
 set(outputs "${LIBMDF_DIST_DIR}/libmdf-lua-${version}.tar.gz"
   "${LIBMDF_DIST_DIR}/libmdf-${version}-1.rockspec"
   "${LIBMDF_DIST_DIR}/libmdf-${version}-1.src.rock")
+file(GLOB documentation CONFIGURE_DEPENDS "${source}/docs/*.md")
 add_custom_command(OUTPUT ${outputs}
   COMMAND bash "${source}/scripts/package_lua_sources.sh"
     "${version}" "${LIBMDF_DIST_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
   DEPENDS "${source}/LICENSE" "${source}/README.md"
+    ${documentation}
     "${source}/libmdf-scm-1.rockspec.in"
     "${source}/lua/libmdf.lua" "${source}/lua/libmdf_core.c"
     "${source}/scripts/package_lua_sources.sh" "${source}/scripts/stage_lua_rock_sources.sh"

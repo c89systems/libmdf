@@ -18,6 +18,7 @@ add_custom_command(OUTPUT "${sdk}/installed.stamp"
   COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_CURRENT_BINARY_DIR}" --component sdk --prefix "${sdk}"
   COMMAND "${CMAKE_COMMAND}" -E touch "${sdk}/installed.stamp"
   DEPENDS ${LIBMDF_EXPORT_TARGETS} "${CMAKE_CURRENT_BINARY_DIR}/cmake_install.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/README.md" ${LIBMDF_DOCUMENTATION}
     "${CMAKE_CURRENT_SOURCE_DIR}/include/libmdf.h"
     "${LIBMDF_GENERATED_INCLUDE_DIR}/libmdf/mdf.h"
   VERBATIM)

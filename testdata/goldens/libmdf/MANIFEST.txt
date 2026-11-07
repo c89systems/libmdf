@@ -243,6 +243,38 @@ escaped-code-pipes.deck.default testdata/table-corpus/escaped-code-pipes.md --de
 escaped-code-pipes.deck.w42 testdata/table-corpus/escaped-code-pipes.md --deck -w 42
 escaped-code-pipes.deck.slide-numbers.fade testdata/table-corpus/escaped-code-pipes.md --deck --slide-numbers -x fade
 escaped-code-pipes.deck.boring testdata/table-corpus/escaped-code-pipes.md --deck --boring
+literal-nbsp.ansi.styled.w12 testdata/parity-regressions/literal-nbsp.md --ansi -w 12
+literal-nbsp.ansi.boring.w12 testdata/parity-regressions/literal-nbsp.md --ansi --boring -w 12
+literal-nbsp.ansi.styled.w80 testdata/parity-regressions/literal-nbsp.md --ansi -w 80
+literal-nbsp.ansi.boring.w80 testdata/parity-regressions/literal-nbsp.md --ansi --boring -w 80
+literal-nbsp.html.default testdata/parity-regressions/literal-nbsp.md --html
+literal-nbsp.html.boring testdata/parity-regressions/literal-nbsp.md --html --boring
+intraword-underscores.ansi.styled.w20.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi -w 20 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.boring.w20.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi --boring -w 20 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.styled.w20.margin-l0-r0 testdata/parity__nbsp.md --ansi -w 20 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.boring.w20.margin-l0-r0 testdata/parity__nbsp.md --ansi --boring -w 20 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.styled.w40.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi -w 40 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.boring.w40.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi --boring -w 40 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.styled.w40.margin-l0-r0 testdata/parity__nbsp.md --ansi -w 40 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.boring.w40.margin-l0-r0 testdata/parity__nbsp.md --ansi --boring -w 40 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.styled.w80.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi -w 80 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.boring.w80.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi --boring -w 80 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.styled.w80.margin-l0-r0 testdata/parity__nbsp.md --ansi -w 80 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.boring.w80.margin-l0-r0 testdata/parity__nbsp.md --ansi --boring -w 80 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.styled.w100.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi -w 100 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.boring.w100.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi --boring -w 100 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.styled.w100.margin-l0-r0 testdata/parity__nbsp.md --ansi -w 100 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.boring.w100.margin-l0-r0 testdata/parity__nbsp.md --ansi --boring -w 100 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.styled.w120.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi -w 120 --margin-left 0 --margin-right 0
+intraword-underscores.ansi.boring.w120.margin-l0-r0 testdata/parity-regressions/intraword-underscores.md --ansi --boring -w 120 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.styled.w120.margin-l0-r0 testdata/parity__nbsp.md --ansi -w 120 --margin-left 0 --margin-right 0
+nbsp-identifiers.ansi.boring.w120.margin-l0-r0 testdata/parity__nbsp.md --ansi --boring -w 120 --margin-left 0 --margin-right 0
+intraword-underscores.html.default testdata/parity-regressions/intraword-underscores.md --html
+intraword-underscores.html.w42 testdata/parity-regressions/intraword-underscores.md --html -w 42
+nbsp-identifiers.html.default testdata/parity__nbsp.md --html
+nbsp-identifiers.html.w42 testdata/parity__nbsp.md --html -w 42
+essay-10x.html.default testdata/10x.md --html
+essay-10x.html.w42 testdata/10x.md --html -w 42
 osc8-labels.ansi.styled.w12.margin-l0-r0 tests/golden-fixtures/osc8-labels.md --ansi --osc8 -w 12 --margin-left 0 --margin-right 0
 osc8-labels.ansi.boring.w12.margin-l0-r0 tests/golden-fixtures/osc8-labels.md --ansi --osc8 --boring -w 12 --margin-left 0 --margin-right 0
 osc8-labels.ansi.styled.w80.margin-l0-r0 tests/golden-fixtures/osc8-labels.md --ansi --osc8 -w 80 --margin-left 0 --margin-right 0

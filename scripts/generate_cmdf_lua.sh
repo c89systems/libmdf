@@ -7,6 +7,8 @@ mkdir -p "$(dirname "$OUT")"
 
 cat > "$OUT" <<EOF
 #!/usr/bin/env lua
+-- cmdf Lua CLI: synchronous file adapters and option handling for libmdf.
+-- Rendering and interactive paging use the public facade and native receiver.
 local mdf = require("libmdf")
 local core = require("libmdf.core")
 
@@ -43,6 +45,7 @@ local function usage()
   io.stderr:write("  -b, --boring               Boring ANSI output\\n")
   io.stderr:write("  -p, --pager                Page a named file interactively\\n")
   io.stderr:write("      --pager-format MODE    Pager input: auto|text|markdown (text hard-wraps)\\n")
+  io.stderr:write("      --pager-cache BYTES    Rendered content cache, 0=1 MiB (minimum 65536)\\n")
   io.stderr:write("  -o, --output PATH          Output file\\n")
   io.stderr:write("  -t, --theme NAME           Theme name\\n")
   io.stderr:write("  -T, --title TITLE          HTML document title\\n")
@@ -167,6 +170,13 @@ while i <= #arg do
     pager_format = arg[i]
     if pager_format ~= "auto" and pager_format ~= "text" and pager_format ~= "markdown" then
       error("cmdf.lua: invalid pager format (expected auto|text|markdown)", 0)
+    end
+  elseif a == "--pager-cache" then
+    i = i + 1
+    local value = arg[i]
+    opts.cache_budget = value and value:match("^%d+$") and math.tointeger(value)
+    if not opts.cache_budget or (opts.cache_budget ~= 0 and opts.cache_budget < 65536) then
+      error("cmdf.lua: --pager-cache requires 0 or at least 65536 bytes", 0)
     end
   elseif a == "-w" or a == "--width" then
     i = i + 1
@@ -399,6 +409,9 @@ end
 
 if pager_format and not pager_requested then
   error("cmdf.lua: --pager-format requires --pager", 0)
+end
+if opts.cache_budget and not pager_requested then
+  error("cmdf.lua: --pager-cache requires --pager", 0)
 end
 if pager_requested then
   if not input_path then

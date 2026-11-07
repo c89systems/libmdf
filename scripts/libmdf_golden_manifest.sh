@@ -151,6 +151,28 @@ emit_styled_link_label_fixture styled-link-labels testdata/styled-link-labels.md
 emit_url_wrap_fixture escaped-code-pipes testdata/table-corpus/escaped-code-pipes.md 40 80 100 120
 emit_html_deck escaped-code-pipes testdata/table-corpus/escaped-code-pipes.md
 
+# Preserve literal NBSP bytes independently of Go's final-emission conversion.
+for width in 12 80; do
+  emit_case "literal-nbsp.ansi.styled.w$width" testdata/parity-regressions/literal-nbsp.md --ansi -w "$width"
+  emit_case "literal-nbsp.ansi.boring.w$width" testdata/parity-regressions/literal-nbsp.md --ansi --boring -w "$width"
+done
+emit_case literal-nbsp.html.default testdata/parity-regressions/literal-nbsp.md --html
+emit_case literal-nbsp.html.boring testdata/parity-regressions/literal-nbsp.md --html --boring
+
+# Literal identifiers and math-like text differ from Go's underscore rewrite.
+for width in 20 40 80 100 120; do
+  emit_case "intraword-underscores.ansi.styled.w$width.margin-l0-r0" testdata/parity-regressions/intraword-underscores.md --ansi -w "$width" --margin-left 0 --margin-right 0
+  emit_case "intraword-underscores.ansi.boring.w$width.margin-l0-r0" testdata/parity-regressions/intraword-underscores.md --ansi --boring -w "$width" --margin-left 0 --margin-right 0
+  emit_case "nbsp-identifiers.ansi.styled.w$width.margin-l0-r0" testdata/parity__nbsp.md --ansi -w "$width" --margin-left 0 --margin-right 0
+  emit_case "nbsp-identifiers.ansi.boring.w$width.margin-l0-r0" testdata/parity__nbsp.md --ansi --boring -w "$width" --margin-left 0 --margin-right 0
+done
+emit_case intraword-underscores.html.default testdata/parity-regressions/intraword-underscores.md --html
+emit_case intraword-underscores.html.w42 testdata/parity-regressions/intraword-underscores.md --html -w 42
+emit_case nbsp-identifiers.html.default testdata/parity__nbsp.md --html
+emit_case nbsp-identifiers.html.w42 testdata/parity__nbsp.md --html -w 42
+emit_case essay-10x.html.default testdata/10x.md --html
+emit_case essay-10x.html.w42 testdata/10x.md --html -w 42
+
 # Explicit OSC8 cases exercise label color, leading spaces, and word wrapping.
 for width in 12 80; do
   emit_case "osc8-labels.ansi.styled.w$width.margin-l0-r0" tests/golden-fixtures/osc8-labels.md \

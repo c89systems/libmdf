@@ -2098,6 +2098,7 @@ void ansi_reset_line_output_state(mdf_impl *impl)
     impl->ansi_pending_space_plain = 0;
     impl->ansi_line_has_space = 0;
     impl->ansi_prev_char = 0;
+    impl->ansi_literal_underscore_run = 0;
 }
 
 static int ansi_emit_raw_newline(mdf_impl *impl, mdf_sink *sink)
@@ -9013,6 +9014,7 @@ static int ansi_process_text(mdf_impl *impl, mdf_sink *sink, const char *src, si
 
     for (i = 0; i < len; i++) {
         c = src[i];
+        if (c != '_') impl->ansi_literal_underscore_run = 0;
         if (impl->ansi_escape_pending) {
             impl->ansi_escape_pending = 0;
             if (mdf_markdown_escapable_char(c)) {
@@ -9195,10 +9197,14 @@ reprocess_inline_char:
                 ansi_begin_inline_code_open(impl);
             } else if (c == '_' &&
                        (!impl->ansi_pending_space || impl->word.len > 0) &&
-                       ascii_is_alnum_char(impl->ansi_prev_char)) {
-                if (ansi_write_visible_nbsp(impl, sink) != 0) {
+                       (ascii_is_alnum_char(impl->ansi_prev_char) ||
+                        (impl->ansi_literal_underscore_run && impl->ansi_prev_char == '_'))) {
+                /* An intraword underscore run cannot open emphasis. Keep it
+                 * in the pending word, including across input fragments. */
+                if (ansi_write_visible_char(impl, sink, c) != 0) {
                     return -1;
                 }
+                impl->ansi_literal_underscore_run = 1;
             } else if (c == '*' || c == '_') {
                 if (ansi_source_is_opening_punct_only(impl, mdf_text_word(&impl->word))) {
                     if (ansi_flush_word(impl, sink) != 0) return -1;
@@ -11511,7 +11517,8 @@ mdf_status ansi_renderer_finish(mdf_renderer *self, mdf_impl *impl, mdf_sink *si
     if (impl->opts.ansi_mode == MDF_ANSI_OFF && ansi_finish_plain_tokens(self, sink) != 0) {
         return mdf_renderer_fail_from_impl(self, impl, "sink write failed");
     }
-    if (impl->ansi_escape_pending && ansi_inline_flush_literal(impl, sink) != 0) {
+    if ((impl->ansi_escape_pending || impl->inline_emph_pending) &&
+        ansi_inline_flush_literal(impl, sink) != 0) {
         return mdf_renderer_fail_from_impl(self, impl, "sink write failed");
     }
     if (impl->ansi_col > 0 || impl->ansi_pending_space || impl->word.len > 0 ||
@@ -11526,7 +11533,7 @@ mdf_status ansi_renderer_finish(mdf_renderer *self, mdf_impl *impl, mdf_sink *si
 static mdf_status html_renderer_finish_flush_ansi_tail(mdf_renderer *self, mdf_impl *impl, mdf_sink *sink)
 {
     if (!(impl->ansi_col > 0 || impl->ansi_pending_space || impl->word.len > 0 ||
-          impl->ansi_escape_pending)) {
+          impl->ansi_escape_pending || impl->inline_emph_pending)) {
         return MDF_OK;
     }
     if (html_bridge_run_ansi_newline(self, sink) != 0) {

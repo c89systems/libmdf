@@ -101,6 +101,12 @@ for _, cli in ipairs({ cmdf, cmdf_lua }) do
     "--pager-format requires --pager", 1, true))
   assert(run_command_expect_fail(shell_quote(cli) .. " --pager --pager-format invalid"):find(
     "invalid pager format", 1, true))
+  assert(run_command_expect_fail(shell_quote(cli) .. " --pager-cache 65536"):find(
+    "--pager-cache requires --pager", 1, true))
+  for _, value in ipairs({ "1", "1024", "65535", "-1", "invalid" }) do
+    assert(run_command_expect_fail(shell_quote(cli) .. " --pager --pager-cache " .. value):find(
+      "--pager-cache requires 0 or at least 65536 bytes", 1, true))
+  end
 end
 local sample = "# Lua\n\nbody with **strong** and [link](https://example.com)\n"
 local parity_opts = { ansi_mode = "on", boring = true, osc8 = mdf.detect_osc8_support() }
@@ -138,6 +144,8 @@ assert(type(mdf.version_minor) == "number", "lua facade exposes version_minor")
 assert(type(mdf.version_patch) == "number", "lua facade exposes version_patch")
 assert(mdf.status.OK == 0, "lua facade exposes MDF_OK")
 assert(mdf.status_string(mdf.status.INVALID) == "invalid argument", "lua facade exposes status_string")
+assert(mdf.status_string(mdf.status.TERMINAL_SIZE) == "terminal too large for pager content cache",
+  "lua facade exposes the oversized-terminal status")
 assert(type(mdf.token.CHART_BLOCK) == "number", "lua facade exposes chart block token")
 assert(#mdf.theme_names() > 0, "lua facade exposes theme_names")
 assert(mdf.theme_exists("default"), "lua facade exposes theme_exists")

@@ -13,6 +13,7 @@ cp "$root/scripts/require_build_path.sh" "$source/scripts/"
 cp -R "$root/cmake/lua-package" "$source/cmake/"
 cp "$root/"{LICENSE,README.md,libmdf-scm-1.rockspec.in} "$source/"
 cp "$root/lua/"{libmdf.lua,libmdf_core.c} "$source/lua/"
+cp -R "$root/docs" "$source/"
 produce() { bash "$source/scripts/release_lua_artifacts.sh" > "$work/$1.log" 2>&1; }
 timestamps() { find "$source/dist" -type f -printf '%f %T@\n' | sort; }
 produce first
@@ -30,6 +31,14 @@ mkdir -p "$work/extract"
 tar -C "$work/extract" -xzf "$source/dist/libmdf-lua-0.0.0.tar.gz"
 cmp "$source/lua/libmdf.lua" "$work/extract/libmdf-lua-0.0.0/lua/libmdf.lua"
 if cmp -s "$work/first/libmdf-lua-0.0.0.tar.gz" "$source/dist/libmdf-lua-0.0.0.tar.gz"; then exit 1; fi
+# Guide edits must also invalidate all source artifacts and preserve links.
+printf '\nLua guide packaging fixture.\n' >> "$source/docs/lua.md"
+produce documentation
+rm -rf "$work/extract"
+mkdir -p "$work/extract"
+tar -C "$work/extract" -xzf "$source/dist/libmdf-lua-0.0.0.tar.gz"
+cmake -DDOCUMENT_ROOT="$work/extract/libmdf-lua-0.0.0" -DREFERENCE_ROOT="$source" \
+  -P "$root/cmake/CheckDocumentation.cmake"
 mkdir -p "$work/rock"
 unzip -q -d "$work/rock" "$source/dist/libmdf-0.0.0-1.src.rock"
 cmp "$source/dist/libmdf-lua-0.0.0.tar.gz" "$work/rock/libmdf-lua-0.0.0.tar.gz"

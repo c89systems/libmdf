@@ -1,8 +1,16 @@
+---Public Lua 5.5 facade for libmdf rendering and interactive paging.
+---Handles own native receivers; close them after use. Reader/writer callbacks
+---run synchronously, and callback errors propagate after native cleanup.
+---String-returning helpers materialize their result; stream and document
+---helpers deliver decided output through a caller-supplied writer.
 local core = require("libmdf.core")
 local mdf = {}
 
+---Return at most cap bytes; nil or an empty string means EOF.
 ---@alias libmdf.Reader fun(cap: integer): string|nil
+---Accept the complete chunk; false fails the write, nil/truthy values accept it.
 ---@alias libmdf.Writer fun(chunk: string): boolean|nil
+---Observe one completed ANSI write; false fails the render after that write.
 ---@alias libmdf.Trace fun(format: string, chunk: string): boolean|nil
 
 ---@class libmdf.FontOptions
@@ -47,7 +55,7 @@ local mdf = {}
 ---@class libmdf.Token
 ---@field type integer|string A `mdf.token` value or its lower-case name.
 ---@field text? string Token bytes. A text token interprets inline Markdown; literal_text bypasses syntax. Token boundaries never force an unfinished word to emit.
----@field level? integer
+---@field level? integer Heading depth (1–6); other structural tokens follow the C token contract.
 
 ---@class libmdf.Handle
 ---@field render fun(self: libmdf.Handle, markdown: string): string Materializes one complete render without using the bound sink.
@@ -139,9 +147,10 @@ end
 
 ---Stream through explicit per-call reader and writer callbacks without binding
 ---the writer to a persistent handle. The reader returns a string up to `cap`
----or `nil` at EOF; a writer/trace callback returns `false` to fail.
+---or `nil`/an empty string at EOF; a writer/trace callback returns `false` to fail.
 ---Callback exceptions are rethrown unchanged after native cleanup, including OOM
----while preparing callback arguments. Writer calls preserve decision boundaries.
+---while preparing callback arguments. ANSI writer calls preserve decision boundaries;
+---HTML/deck writers may also receive structural markup.
 ---@param read libmdf.Reader
 ---@param write libmdf.Writer
 ---@param opts? libmdf.Options
@@ -182,12 +191,23 @@ end
 ---pager navigation still requires terminal controls. write_trace is rejected.
 ---Text format hard-wraps literal text/log files and supports the same search.
 ---Omit format for automatic .md detection; Markdown media types accept UTF-8.
----The pager reads a finite snapshot through EOF before viewing; it does not
----follow appended log data. The callback cannot preempt a blocking read/write.
+---Input is read on demand into a contiguous rendered-content cache (default
+---1 MiB). cache_budget excludes separately bounded search/index workspace.
+---The minimum is 64 KiB. Oversized terminal geometry or rendered viewports raise
+---"terminal too large for pager content cache" after terminal cleanup.
+---The status shows --% until EOF is reached. Highlights cover cached content;
+---search ordinals/totals are document-wide, with ? until established for the
+---active query. Query/width changes invalidate counts. n/N traverse cyclically.
+---Resize preserves the selected passage and recomputes its rank. Forward reading
+---keeps the live Markdown parser; evicted content and width changes may require prefix replay.
+---No full-input copy is made. Appends are not followed. The callback cannot
+---preempt a blocking read/write.
 ---`should_cancel()` returning true restores the terminal and returns
 ---`false, "cancelled"`; callback exceptions are rethrown after cleanup.
+---Ctrl+C forwards SIGINT after cleanup. If the application's restored handler
+---returns or ignores SIGINT, the result is also `false, "cancelled"`.
 ---@param path string
----@param opts? libmdf.Options|{format?: "markdown"|"text"|"text/markdown", should_cancel?: fun(): boolean}
+---@param opts? libmdf.Options|{format?: "markdown"|"text"|"text/markdown", cache_budget?: integer, should_cancel?: fun(): boolean}
 ---@return boolean completed
 ---@return string? reason
 function mdf.pager(path, opts)

@@ -566,27 +566,37 @@ func collectMarkdownFiles(root string, excludes []string) ([]string, error) {
 // as the decision oracle; native tests pin URI bytes and terminal cursor layout.
 var terminalURLPattern = regexp.MustCompile(`(?i)://|\]\(|www\.|[a-z0-9_-]+\.[a-z0-9._-]+/|//[a-z0-9_-]+`)
 
-func compareTerminalURLs(data []byte, chunk, width int, opts parityOptions, trace bool) error {
-	want, wantTrace, err := renderLibmdf("ansi", data, len(data)+1, width, opts, trace)
+func compareWholeSourceLibmdf(mode string, data []byte, chunk, width int, opts parityOptions, trace bool, reason string) error {
+	want, wantTrace, err := renderLibmdf(mode, data, len(data)+1, width, opts, trace)
 	if err != nil {
-		return fmt.Errorf("whole-source terminal URL render: %w", err)
+		return fmt.Errorf("whole-source %s render: %w", reason, err)
 	}
-	got, gotTrace, err := renderLibmdf("ansi", data, chunk, width, opts, trace)
+	got, gotTrace, err := renderLibmdf(mode, data, chunk, width, opts, trace)
 	if err != nil {
 		return err
 	}
 	if !bytes.Equal(want, got) {
-		return fmt.Errorf("terminal URL output depends on source fragments\n%s", firstDiffContext(want, got))
+		return fmt.Errorf("%s output depends on source fragments\n%s", reason, firstDiffContext(want, got))
 	}
 	if trace && !bytes.Equal(wantTrace, gotTrace) {
-		return fmt.Errorf("terminal URL decisions depend on source fragments\n%s", firstDiffContext(wantTrace, gotTrace))
+		return fmt.Errorf("%s decisions depend on source fragments\n%s", reason, firstDiffContext(wantTrace, gotTrace))
 	}
 	return nil
 }
 
 func compareLibmdfOne(mode string, data []byte, chunk int, width int, opts parityOptions, trace bool) error {
 	if mode == "ansi" && !opts.osc8 && terminalURLPattern.Match(data) {
-		return compareTerminalURLs(data, chunk, width, opts, trace)
+		return compareWholeSourceLibmdf(mode, data, chunk, width, opts, trace, "terminal URL")
+	}
+	// Go changes both final NBSP bytes and oversized-word layout. Keep raw
+	// C output/trace checks, then compare final Go output on a SPACE input control.
+	// Native goldens pin NBSP preservation and wrapping. The control has no NBSP,
+	// so this calls the ordinary reference path without further recursion.
+	if bytes.Contains(data, []byte("\u00a0")) {
+		if err := compareWholeSourceLibmdf(mode, data, chunk, width, opts, trace, "literal NBSP"); err != nil {
+			return err
+		}
+		return compareLibmdfOne(mode, bytes.ReplaceAll(data, []byte("\u00a0"), []byte(" ")), chunk, width, opts, false)
 	}
 	goOut, goTrace, err := renderReference(mode, data, chunk, width, opts, trace)
 	if err != nil {

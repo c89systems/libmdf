@@ -1115,7 +1115,7 @@ static int test_stream_trace_contract(void)
         st = incremental_capture(&opts, markdown, strlen(markdown), &cap);
         fails += expect(st == MDF_OK && cap.failed == 0,
                         "incremental trailing inline whitespace EOF render succeeds");
-        fails += expect_output_equals(&cap, "b \n",
+        fails += expect_output_equals(&cap, "b_\n",
                                       "incremental trailing inline whitespace matches EOF rendering");
         fails += expect_trace_matches_writes(&cap,
                                              "incremental trailing inline whitespace EOF writes match traces");
@@ -1143,7 +1143,7 @@ static int test_stream_trace_contract(void)
         st = incremental_capture(&opts, markdown, strlen("hello_ "), &cap);
         fails += expect(st == MDF_OK && cap.failed == 0,
                         "incremental trailing inline whitespace newline render succeeds");
-        fails += expect_output_equals(&cap, "hello  world\n",
+        fails += expect_output_equals(&cap, "hello_ world\n",
                                       "incremental trailing inline whitespace matches newline rendering");
         fails += expect_trace_matches_writes(&cap,
                                              "incremental trailing inline whitespace newline writes match traces");
@@ -6256,6 +6256,210 @@ static int test_literal_escape_api_contract(void)
     return fails;
 }
 
+static int test_plain_intraword_underscore_contract(void)
+{
+    static const char *const inputs[] = {
+        "$I_{k,j}(F)$ tail\n", "foo_bar_baz tail\n", "foo__bar__baz tail\n",
+        "abc____def tail\n", "end_ next__\n", "end_ _next_ __bold__\n",
+        "\\__foo_\n"
+    };
+    static const char *const expected[] = {
+        "$I_{k,j}(F)$ tail\n", "foo_bar_baz tail\n", "foo__bar__baz tail\n",
+        "abc____def tail\n", "end_ next__\n", "end_ next bold\n", "_foo\n"
+    };
+    mdf_options opts;
+    mdf *renderer;
+    mdf_sink sink;
+    mdf_token token;
+    capture whole;
+    capture current;
+    mdf_status st;
+    char *visible;
+    size_t i;
+    size_t offset;
+    size_t length;
+    size_t count;
+    size_t chunk;
+    int format;
+    int styled;
+    int method;
+    int fails;
+
+    fails = 0;
+    for (format = MDF_FORMAT_ANSI; format <= MDF_FORMAT_HTML; format++) {
+        for (styled = 0; styled < 2; styled++) {
+            mdf_options_init(&opts);
+            opts.ansi_mode = styled ? MDF_ANSI_ON : MDF_ANSI_OFF;
+            opts.width = 80;
+            opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+            for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+                st = render_capture((mdf_format)format, &opts, inputs[i], 4096, &whole);
+                fails += expect(st == MDF_OK && whole.out != NULL, "intraword underscores render successfully");
+                for (method = 0; method < 8; method++) {
+                    chunk = method % 2 ? 1u : 4096u;
+                    if (method < 2) {
+                        st = render_capture((mdf_format)format, &opts, inputs[i], chunk, &current);
+                    } else if (method < 4) {
+                        st = incremental_capture_format((mdf_format)format, &opts, inputs[i], chunk, &current);
+                    } else {
+                        memset(&current, 0, sizeof(current));
+                        opts.write_trace.userdata = &current;
+                        opts.write_trace.emit = capture_trace;
+                        sink.userdata = &current;
+                        sink.write = capture_write;
+                        renderer = NULL;
+                        st = mdf_create((mdf_format)format, &opts, &renderer);
+                        if (st == MDF_OK) st = renderer->set_sink(renderer, &sink);
+                        if (st == MDF_OK) st = renderer->set_word_buffer(renderer, 7, 0);
+                        length = strlen(inputs[i]) - 1;
+                        memset(&token, 0, sizeof(token));
+                        token.type = MDF_TOKEN_TEXT;
+                        for (offset = 0; st == MDF_OK && offset < length; offset += count) {
+                            count = length - offset;
+                            if (count > chunk) count = chunk;
+                            token.text = inputs[i] + offset;
+                            token.len = count;
+                            st = renderer->write_token(renderer, &token);
+                        }
+                        token.type = MDF_TOKEN_NEWLINE;
+                        token.text = NULL;
+                        token.len = 0;
+                        if (st == MDF_OK && method < 6) st = renderer->write_token(renderer, &token);
+                        if (st == MDF_OK) st = renderer->finish(renderer);
+                        if (renderer != NULL) renderer->destroy(renderer);
+                    }
+                    fails += expect(st == MDF_OK && current.out != NULL, "underscore source/feed/token input succeeds");
+                    if (format == MDF_FORMAT_ANSI) {
+                        visible = current.out == NULL ? NULL : strip_ansi(current.out);
+                        if (visible == NULL || strcmp(visible, expected[i]) != 0)
+                            fprintf(stderr, "underscore case=%lu method=%d styled=%d got=%s\n",
+                                    (unsigned long)i, method, styled, visible == NULL ? "(none)" : visible);
+                        fails += expect(visible != NULL && strcmp(visible, expected[i]) == 0,
+                                        "plain intraword underscore runs remain literal without disabling emphasis or escapes");
+                        free(visible);
+                        fails += expect_trace_matches_writes(&current, "intraword underscore sink writes match traces");
+                        if (method < 4)
+                            fails += expect_capture_writes_equal(&current, &whole, "underscore chunks retain exact decision emissions");
+                    } else if (i < 5) {
+                        fails += expect(whole.out != NULL && current.out != NULL && strcmp(current.out, whole.out) == 0,
+                                        "HTML intraword underscore bytes survive source/feed/token fragments");
+                        fails += expect(current.out != NULL && strstr(current.out, i == 0 ? "$I_{k,j}(F)$" :
+                            i == 1 ? "foo_bar_baz" : i == 2 ? "foo__bar__baz" : i == 3 ? "abc____def" : "end_") != NULL,
+                                        "HTML preserves literal underscore content");
+                    }
+                    capture_free(&current);
+                }
+                capture_free(&whole);
+            }
+        }
+    }
+    mdf_options_init(&opts);
+    opts.ansi_mode = MDF_ANSI_OFF;
+    memset(&current, 0, sizeof(current));
+    opts.write_trace.userdata = &current;
+    opts.write_trace.emit = capture_trace;
+    sink.userdata = &current;
+    sink.write = capture_write;
+    renderer = NULL;
+    st = mdf_create(MDF_FORMAT_ANSI, &opts, &renderer);
+    memset(&token, 0, sizeof(token));
+    token.type = MDF_TOKEN_TEXT;
+    token.text = "discard_";
+    token.len = 8;
+    if (st == MDF_OK) st = renderer->set_sink(renderer, &sink);
+    if (st == MDF_OK) st = renderer->write_token(renderer, &token);
+    if (st == MDF_OK) st = renderer->reset(renderer);
+    token.text = "_next_";
+    token.len = 6;
+    if (st == MDF_OK) st = renderer->write_token(renderer, &token);
+    if (st == MDF_OK) st = renderer->finish(renderer);
+    if (st != MDF_OK || current.out == NULL || strcmp(current.out, "next\n") != 0)
+        fprintf(stderr, "underscore reset status=%d output=%s\n", (int)st, current.out == NULL ? "(none)" : current.out);
+    fails += expect(st == MDF_OK && current.out != NULL && strcmp(current.out, "next\n") == 0,
+                    "reset discards literal underscore-run state before a new emphasis span");
+    fails += expect_trace_matches_writes(&current, "reset underscore trace matches real writes");
+    if (renderer != NULL) renderer->destroy(renderer);
+    capture_free(&current);
+    return fails;
+}
+
+static int test_literal_nbsp_stream_contract(void)
+{
+    static const int widths[] = {4, 80};
+    static const char *const inputs[] = {
+        "xx a\302\240b zz\n", "xx **a\302\240b** zz\n", "xx a b zz\n"
+    };
+    static const char *const narrow[] = {
+        "xx\na\302\240b\nzz\n", "xx\na\302\240b\nzz\n", "xx a\nb zz\n"
+    };
+    static const char *const wide[] = {
+        "xx a\302\240b zz\n", "xx a\302\240b zz\n", "xx a b zz\n"
+    };
+    mdf_options opts;
+    capture whole;
+    capture split;
+    capture fed;
+    mdf_status st;
+    char *visible;
+    size_t i;
+    size_t j;
+    size_t joined;
+    size_t w;
+    int mode;
+    int width;
+    int format;
+    int fails;
+
+    fails = 0;
+    for (format = MDF_FORMAT_ANSI; format <= MDF_FORMAT_HTML; format++) {
+        for (mode = 0; mode < 4; mode++) {
+            for (w = 0; w < sizeof(widths) / sizeof(widths[0]); w++) {
+                width = widths[w];
+                mdf_options_init(&opts);
+                opts.width = width;
+                opts.boring = mode % 2;
+                opts.ansi_mode = mode < 2 ? MDF_ANSI_ON : MDF_ANSI_OFF;
+                opts.html_font_source = MDF_HTML_FONT_SOURCE_EXTERNAL;
+                for (i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+                    st = render_capture((mdf_format)format, &opts, inputs[i], 4096, &whole);
+                    fails += expect(st == MDF_OK && whole.out != NULL, "NBSP whole-source render succeeds");
+                    st = render_capture((mdf_format)format, &opts, inputs[i], 1, &split);
+                    fails += expect(st == MDF_OK && split.out != NULL, "NBSP source render splits UTF-8 bytes safely");
+                    st = incremental_capture_format((mdf_format)format, &opts, inputs[i], 1, &fed);
+                    fails += expect(st == MDF_OK && fed.out != NULL, "NBSP incremental render splits UTF-8 bytes safely");
+                    fails += expect(whole.out != NULL && split.out != NULL && fed.out != NULL &&
+                                    strcmp(whole.out, split.out) == 0 && strcmp(whole.out, fed.out) == 0,
+                                    "NBSP source and incremental fragments preserve exact output bytes");
+                    if (format == MDF_FORMAT_ANSI) {
+                        visible = whole.out == NULL ? NULL : strip_ansi(whole.out);
+                        fails += expect(visible != NULL && strcmp(visible, width == 4 ? narrow[i] : wide[i]) == 0,
+                                        "NBSP keeps fitting words together; ordinary spaces remain wrap boundaries");
+                        free(visible);
+                        fails += expect_trace_matches_writes(&whole, "NBSP whole-source sink writes match traces");
+                        fails += expect_trace_matches_writes(&split, "NBSP fragmented sink writes match traces");
+                        fails += expect_trace_matches_writes(&fed, "NBSP incremental sink writes match traces");
+                        fails += expect_capture_writes_equal(&split, &whole, "NBSP source chunks preserve decision emissions");
+                        fails += expect_capture_writes_equal(&fed, &whole, "NBSP feeds preserve decision emissions");
+                        joined = 0;
+                        for (j = 0; j < whole.write_count; j++)
+                            if (strstr(whole.writes[j].data, "a\302\240b") != NULL) joined++;
+                        fails += expect(joined == (i < 2 ? 1u : 0u), "NBSP-connected word uses one decided emission");
+                    } else {
+                        fails += expect(whole.out != NULL &&
+                                        ((i < 2 && strstr(whole.out, "a\302\240b") != NULL) ||
+                                         (i == 2 && strstr(whole.out, "a b") != NULL && strstr(whole.out, "\302\240") == NULL)),
+                                        "HTML retains NBSP for browser layout without replacing ordinary spaces");
+                    }
+                    capture_free(&whole);
+                    capture_free(&split);
+                    capture_free(&fed);
+                }
+            }
+        }
+    }
+    return fails;
+}
+
 static int test_unicode_width_stream_contract(void)
 {
     static const char *const inputs[] = {
@@ -6914,6 +7118,8 @@ int main(int argc, char **argv)
     fails = 0;
     if (contract_memory_checks) {
         fails += test_stream_trace_contract();
+        fails += test_plain_intraword_underscore_contract();
+        fails += test_literal_nbsp_stream_contract();
         fails += test_escaped_markdown_contract();
         fails += test_literal_escape_api_contract();
         fails += test_literal_html_contract();
@@ -6935,6 +7141,8 @@ int main(int argc, char **argv)
         return fails == 0 ? 0 : 1;
     }
     fails += test_stream_trace_contract();
+    fails += test_plain_intraword_underscore_contract();
+    fails += test_literal_nbsp_stream_contract();
     fails += test_escaped_markdown_contract();
     fails += test_literal_escape_api_contract();
     fails += test_literal_html_contract();

@@ -1,5 +1,13 @@
 if(LIBMDF_BUILD_TESTS)
   enable_testing()
+  add_test(NAME documentation_links COMMAND "${CMAKE_COMMAND}"
+    "-DDOCUMENT_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckDocumentation.cmake")
+  add_test(NAME documentation_validation COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DWORK_ROOT=${CMAKE_CURRENT_BINARY_DIR}/documentation-fixture"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.cmake")
+  set_tests_properties(documentation_links documentation_validation PROPERTIES LABELS "host;documentation" TIMEOUT 10)
   add_test(NAME lifecycle_shell_syntax COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_shell.sh")
   set_tests_properties(lifecycle_shell_syntax PROPERTIES LABELS "host;lifecycle" TIMEOUT 10)
   add_executable(benchmark_command benchmarks/command.c)
@@ -232,16 +240,93 @@ if(LIBMDF_BUILD_TESTS)
     # The terminal pager runs after forkpty. Keep this integration test separate
     # from the normal unit suite so it can retain a focused timeout and label.
     set_tests_properties(test_pager PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 30)
+    add_test(NAME test_pager_large_files COMMAND test_pager $<TARGET_FILE:cmdf> --large-files)
+    set_tests_properties(test_pager_large_files PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
+    add_test(NAME test_pager_cached_resize COMMAND test_pager $<TARGET_FILE:cmdf> --cached-resize)
+    set_tests_properties(test_pager_cached_resize PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 60)
+    add_test(NAME test_pager_resize_ranks COMMAND test_pager $<TARGET_FILE:cmdf> --resize-ranks)
+    set_tests_properties(test_pager_resize_ranks PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
+    add_test(NAME test_pager_resize_expansion COMMAND test_pager $<TARGET_FILE:cmdf> --resize-expansion)
+    set_tests_properties(test_pager_resize_expansion PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 60)
+    add_test(NAME memory_pager_resize_expansion COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --resize-expansion-memory)
+    set_tests_properties(memory_pager_resize_expansion PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 90)
+    foreach(scenario repeated_resize sparse_read_ahead)
+      string(REPLACE "_" "-" argument "${scenario}")
+      add_test(NAME test_pager_${scenario} COMMAND test_pager $<TARGET_FILE:cmdf> --${argument})
+      set_tests_properties(test_pager_${scenario} PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 60)
+      add_test(NAME memory_pager_${scenario} COMMAND "${LIBMDF_VALGRIND}"
+        --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+        --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --${argument}-memory)
+      set_tests_properties(memory_pager_${scenario} PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 90)
+    endforeach()
+    add_test(NAME memory_pager_resize_ranks COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --resize-ranks-memory)
+    set_tests_properties(memory_pager_resize_ranks PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 90)
+    add_test(NAME test_pager_preload COMMAND test_pager $<TARGET_FILE:cmdf> --preload)
+    set_tests_properties(test_pager_preload PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
+    add_test(NAME memory_pager_cached_resize COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --cached-resize-memory)
+    set_tests_properties(memory_pager_cached_resize PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 120)
+    add_test(NAME memory_pager_preload COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --preload-memory)
+    set_tests_properties(memory_pager_preload PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 90)
+    add_test(NAME test_pager_row_bytes COMMAND test_pager $<TARGET_FILE:cmdf> --row-bytes)
+    set_tests_properties(test_pager_row_bytes PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 30)
+    add_test(NAME memory_pager_row_bytes COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --row-bytes-memory)
+    set_tests_properties(memory_pager_row_bytes PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 60)
+    add_test(NAME test_pager_large_matches COMMAND test_pager $<TARGET_FILE:cmdf> --large-matches)
+    set_tests_properties(test_pager_large_matches PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
+    add_test(NAME memory_pager_large_matches COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --large-matches-memory)
+    set_tests_properties(memory_pager_large_matches PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 90)
+    add_test(NAME test_pager_cache_growth COMMAND test_pager $<TARGET_FILE:cmdf> --cache-growth)
+    set_tests_properties(test_pager_cache_growth PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 30)
+    add_test(NAME memory_pager_cache_growth COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --cache-growth-memory)
+    set_tests_properties(memory_pager_cache_growth PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 60)
+    add_test(NAME test_pager_search_origin COMMAND test_pager $<TARGET_FILE:cmdf> --search-origin)
+    set_tests_properties(test_pager_search_origin PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
+    add_test(NAME memory_pager_search_origin COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --search-origin-memory)
+    set_tests_properties(memory_pager_search_origin PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 60)
+    add_test(NAME test_pager_search_wrap COMMAND test_pager $<TARGET_FILE:cmdf> --search-wrap
+      "${CMAKE_CURRENT_SOURCE_DIR}/testdata/10x.md")
+    set_tests_properties(test_pager_search_wrap PROPERTIES LABELS "integration;cli;pager;forkpty" TIMEOUT 45)
     add_test(NAME memory_pager COMMAND "${LIBMDF_VALGRIND}"
       --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
       --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --features)
     set_tests_properties(memory_pager PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 120)
+    add_test(NAME memory_pager_large_files COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --large-files-memory)
+    set_tests_properties(memory_pager_large_files PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 120)
+    add_test(NAME memory_pager_search_wrap COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager> $<TARGET_FILE:cmdf> --search-wrap-memory
+      "${CMAKE_CURRENT_SOURCE_DIR}/testdata/10x.md")
+    set_tests_properties(memory_pager_search_wrap PROPERTIES LABELS "memory;pager;forkpty" TIMEOUT 120)
 
-    add_executable(test_pager_ratio tests/test_pager_ratio.c)
-    libmdf_configure_development_runtime(test_pager_ratio)
-    libmdf_configure_c89_target(test_pager_ratio)
-    add_test(NAME test_pager_ratio COMMAND test_pager_ratio)
-    set_tests_properties(test_pager_ratio PROPERTIES LABELS "unit;pager" TIMEOUT 10)
+    add_executable(test_pager_query tests/test_pager_query.c)
+    libmdf_configure_development_runtime(test_pager_query)
+    libmdf_configure_c89_target(test_pager_query)
+    target_include_directories(test_pager_query PRIVATE "${LIBMDF_GENERATED_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(test_pager_query PRIVATE mdf_pager_test)
+    add_test(NAME test_pager_query COMMAND test_pager_query)
+    set_tests_properties(test_pager_query PROPERTIES LABELS "unit;pager" TIMEOUT 15)
+    add_test(NAME memory_pager_query COMMAND "${LIBMDF_VALGRIND}"
+      --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite,indirect
+      --error-exitcode=1 $<TARGET_FILE:test_pager_query>)
+    set_tests_properties(memory_pager_query PROPERTIES LABELS "memory;pager" TIMEOUT 60)
 
     add_test(NAME chart_corpus
       COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_chart_corpus.sh
@@ -274,7 +359,7 @@ if(LIBMDF_BUILD_TESTS)
       COMMAND ${CMAKE_COMMAND}
               -DNM=${CMAKE_NM}
               -DLIBRARY=$<TARGET_FILE:${LIBMDF_PRODUCTION_TARGET}>
-              -DSYMBOL=mdf_pager_test_set_termination_handler_install_failure
+              -DSYMBOL=mdf_pager_test_
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/assert_symbol_absent.cmake)
     set_tests_properties(${LIBMDF_PRODUCTION_TARGET}_excludes_pager_test_hook PROPERTIES
       LABELS "unit;api"

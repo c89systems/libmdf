@@ -22,7 +22,6 @@ mkdir -p "$TMP"
 # drivers then use the receiver API; the explicit-sink wrappers remain public
 # compatibility functions, but are not cmdf's steady-state output path.
 grep -F -q 'renderer->set_sink(renderer, &sink)' "$ROOT/src/cmdf.c"
-grep -F -q 'renderer->set_sink(renderer, sink)' "$ROOT/src/cmdf.c"
 grep -F -q 'renderer->render(renderer, &source)' "$ROOT/src/cmdf.c"
 grep -F -q 'renderer->feed(renderer, buf, n)' "$ROOT/src/cmdf.c"
 grep -F -q 'renderer->flush(renderer)' "$ROOT/src/cmdf.c"
@@ -128,8 +127,8 @@ run_boundary_case unfinished-inline 'hello *[\n' '*hello *[\n\n'
 run_boundary_case unfinished-inline-space 'hello*\n' 'hello* '
 run_boundary_case pending-tab-wrap 'helloabcde\two\nrld\n' 'helloabcde\tworld\n' -w 12
 run_boundary_case empty-heading '# \n' '#  '
-run_boundary_case trailing-inline-space-eof 'b \n' 'b_ '
-run_boundary_case trailing-inline-space-newline 'hello  world\n' 'hello_ \nworld'
+run_boundary_case trailing-inline-space-eof 'b_\n' 'b_ '
+run_boundary_case trailing-inline-space-newline 'hello_ world\n' 'hello_ \nworld'
 
 run_source_boundary_case() {
   name=$1
