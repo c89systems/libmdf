@@ -1738,6 +1738,115 @@ static int test_table_pipe_escape_contract(void)
     return fails;
 }
 
+/* Model the terminal's bold-as-bright palette for tile cells. HTML alone cannot
+ * expose a mismatch between a bold block foreground and its normal background. */
+static int tile_cells_have_uniform_color(const char *out)
+{
+    const char *p;
+    int bold;
+    int fg;
+    int bg;
+    int fill_bg;
+    size_t cells;
+    size_t text_cells;
+
+    bold = 0;
+    fg = -1;
+    bg = -1;
+    fill_bg = -1;
+    cells = 0;
+    text_cells = 0;
+    if (out == NULL) return 0;
+    p = out;
+    while (*p != '\0') {
+        if (p[0] == '\033' && p[1] == '[') {
+            char *end;
+            long code;
+
+            p += 2;
+            do {
+                code = strtol(p, &end, 10);
+                if (end == p) return 0;
+                p = end;
+                if ((code == 38 || code == 48) && strncmp(p, ";5;", 3) == 0) {
+                    int color;
+
+                    color = (int)strtol(p + 3, &end, 10);
+                    if (code == 38) fg = 256 + color;
+                    else bg = 256 + color;
+                    p = end;
+                } else if (code == 0) {
+                    bold = 0;
+                    fg = -1;
+                    bg = -1;
+                } else if (code == 1) bold = 1;
+                else if (code == 22) bold = 0;
+                else if (code >= 30 && code <= 37) fg = (int)code - 30;
+                else if (code >= 90 && code <= 97) fg = (int)code - 90 + 8;
+                else if (code >= 40 && code <= 47) bg = (int)code - 40;
+                else if (code >= 100 && code <= 107) bg = (int)code - 100 + 8;
+            } while (*p == ';' && *++p != '\0');
+            if (*p != 'm') return 0;
+            p++;
+        } else if (strncmp(p, "█", strlen("█")) == 0) {
+            int visible_fg;
+
+            visible_fg = bold && fg >= 0 && fg < 8 ? fg + 8 : fg;
+            if (bg < 0 || visible_fg != bg) return 0;
+            fill_bg = bg;
+            cells++;
+            p += strlen("█");
+        } else {
+            if (bg >= 0 && *p >= ' ' && *p <= '~') {
+                if (bg != fill_bg || fg != 0) return 0;
+                text_cells++;
+            }
+            p++;
+        }
+    }
+    return cells > 0 && text_cells > 0;
+}
+
+static int test_tile_label_color_contract(void)
+{
+    static const char *const markdown[] = {
+        "```mdf-tile-chart\nPlanning,30\nBuilding,45\nReview,25\n```\n",
+        "```mdf-tile-chart,colored-bars=off\nPlanning,30\nBuilding,45\nReview,25\n```\n"
+    };
+    static const size_t fragments[] = {1, 4096};
+    mdf_options opts;
+    capture cap;
+    mdf_status st;
+    size_t theme;
+    size_t mode;
+    size_t fragment;
+    int fails;
+
+    fails = 0;
+    for (theme = 0; theme < mdf_theme_count(); theme++) {
+        for (mode = 0; mode < sizeof(markdown) / sizeof(markdown[0]); mode++) {
+            for (fragment = 0; fragment < sizeof(fragments) / sizeof(fragments[0]); fragment++) {
+                mdf_options_init(&opts);
+                opts.ansi_mode = MDF_ANSI_ON;
+                opts.width = 80;
+                opts.theme_name = mdf_theme_name(theme);
+                st = render_capture(MDF_FORMAT_ANSI, &opts, markdown[mode], fragments[fragment], &cap);
+                fails += expect(st == MDF_OK && !cap.failed, "tile label color render succeeds");
+                if (!tile_cells_have_uniform_color(cap.out)) {
+                    fprintf(stderr, "tile color mismatch: theme=%s mono=%lu fragment=%lu\n",
+                            opts.theme_name, (unsigned long)mode, (unsigned long)fragments[fragment]);
+                    fails += expect(0, "tile fills match label backgrounds on bold-as-bright terminals");
+                }
+                fails += expect_contains(cap.out, "Planning", "tile label remains visible");
+                fails += expect_contains(cap.out, "30.0%", "tile percentage remains visible");
+                fails += expect_trace_matches_writes(&cap, "tile label color writes match traces");
+                capture_free(&cap);
+            }
+        }
+    }
+    return fails;
+}
+
 static int test_chart_trace_contract(void)
 {
     static const char markdown[] =
@@ -7160,6 +7269,7 @@ int main(int argc, char **argv)
     fails += test_adaptive_table_contract();
     fails += test_table_pipe_escape_contract();
     fails += test_chart_trace_contract();
+    fails += test_tile_label_color_contract();
     fails += test_runtime_width_autolink_contract();
     fails += test_fallback_link_punctuation_contract();
     fails += test_long_link_margin_contract();

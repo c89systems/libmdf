@@ -10191,12 +10191,12 @@ static int ansi_chart_style_bg_only_code(const char *style, char *buf, size_t bu
             if (next == scan) {
                 value = 0;
             }
-            if (value >= 30 && value <= 37) {
+            if (prev2 == 38 && prev == 5) {
+                xterm_bg = value;
+            } else if (value >= 30 && value <= 37) {
                 basic_bg = value + 10;
             } else if (value >= 90 && value <= 97) {
                 basic_bg = value + 10;
-            } else if (prev2 == 38 && prev == 5) {
-                xterm_bg = value;
             }
             prev2 = prev;
             prev = value;
@@ -10240,6 +10240,9 @@ static int ansi_chart_append_tile_fill(mdf_impl *impl, const char *style)
     styled = MDF_ANSI_STYLED(impl) && style != NULL && style[0] != '\0';
     if (styled) {
         if (ansi_chart_append_style(impl, style) != 0) return -1;
+        /* Bold can brighten a basic foreground without brightening its
+         * background. Keep block fills at the label background's intensity. */
+        if (mdf_emit_buffer_append_cstr(impl, "\033[22m") != 0) return -1;
         if (ansi_chart_style_bg_only_code(style, bg_style, sizeof(bg_style)) != 0) return -1;
         if (ansi_chart_append_style(impl, bg_style) != 0) return -1;
     }

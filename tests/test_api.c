@@ -3536,7 +3536,7 @@ int main(void)
     fails += expect(st == MDF_OK && out != NULL, "html quoted chart geometry render");
     fails += expect(html_vertical_chart_axis_columns_aligned(out),
                     "html quoted vertical chart keeps y-axis rows aligned after quote prefix");
-    fails += expect(strstr(out, "display:block;white-space:pre;overflow-wrap:normal;text-align:center;\"><span class=\"mdf-prefix\"></span><span class=\"mdf-content\" style=\"display:inline-block;white-space:pre;overflow-wrap:normal;text-align:left;\"><span style=\"color:rgb(0,205,0);background-color:rgb(0,205,0);display:inline-block;height:1lh;line-height:1lh;vertical-align:top;font-weight:700;\">") != NULL &&
+    fails += expect(strstr(out, "display:block;white-space:pre;overflow-wrap:normal;text-align:center;\"><span class=\"mdf-prefix\"></span><span class=\"mdf-content\" style=\"display:inline-block;white-space:pre;overflow-wrap:normal;text-align:left;\"><span style=\"color:rgb(0,205,0);background-color:rgb(0,205,0);display:inline-block;height:1lh;line-height:1lh;vertical-align:top;\">") != NULL &&
                     strstr(out, "display:block;white-space:pre;overflow-wrap:normal;text-align:center;\"><span class=\"mdf-prefix\"></span><span class=\"mdf-content\" style=\"display:inline-block;white-space:pre;overflow-wrap:normal;text-align:left;\"><span style=\"color:rgb(220,220,220);\"> </span><span style=\"color:rgb(0,205,0);background-color:rgb(0,205,0);") == NULL,
                     "html quoted tile chart trims unstyled leading tile padding");
     renderer->string_free(renderer, out);
